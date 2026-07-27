@@ -21,14 +21,26 @@ parsed on-device, with no network and no microphone permission.
 
 ## Build
 
-The Xcode project is generated, not committed. [XcodeGen](https://github.com/yonaskolb/XcodeGen) builds it from `project.yml`:
+The Xcode project is generated, not committed. [XcodeGen](https://github.com/yonaskolb/XcodeGen) builds it from `project.yml`.
+
+First, create your local signing config — generation fails without it, on purpose:
+
+```bash
+cp Config/Local.example.xcconfig Config/Local.xcconfig
+```
+
+Set `BUNDLE_ID_PREFIX` in that file to a reverse-DNS prefix you control; the
+targets append their own suffix, giving `<prefix>.blur` and
+`<prefix>.blur.widget`. `Config/Local.xcconfig` is gitignored, which is the
+point: it holds the values that identify your Apple developer account, so they
+never reach a public `project.yml`. Then:
 
 ```bash
 xcodegen generate && open Blur.xcodeproj
 ```
 
-Set your team under *Signing & Capabilities* for both targets before the first
-run. Regenerate after adding or removing Swift files, or after editing
+Confirm your team under *Signing & Capabilities* for both targets before the
+first run. Regenerate after adding or removing Swift files, or after editing
 `project.yml`.
 
 > **Never edit `Info.plist` by hand.** XcodeGen rewrites it from `project.yml` on
@@ -134,6 +146,7 @@ Blur/
 
 BlurWidget/          Live Activity + Dynamic Island presentation
 Tools/               tone generator
+Config/              Local.example.xcconfig (copy to Local.xcconfig, gitignored)
 blur-icon.png        1024² master for the app icon
 ```
 
@@ -187,5 +200,6 @@ carry no alpha channel, so flatten it on the way into the asset catalogue:
 uv run --no-project --with pillow python -c "from PIL import Image; im = Image.open('blur-icon.png'); out = Image.new('RGB', im.size, (255,255,255)); out.paste(im, mask=im.getchannel('A') if im.mode == 'RGBA' else None); out.save('Blur/Resources/Assets.xcassets/AppIcon.appiconset/icon-1024.png')"
 ```
 
-`Tools/make_icon.py` renders an earlier procedurally-drawn clock mark and is no
-longer what the app ships.
+## License
+
+MIT — see [LICENSE](LICENSE).

@@ -1,3 +1,8 @@
+# Local signing config — bundle ID prefix and Apple Developer Team ID.
+# Never commit this: project.yml is public, so anything identifying lives here.
+# Copy Config/Local.example.xcconfig to create it.
+Config/Local.xcconfig
+
 # XcodeGen output — regenerate with `xcodegen generate`
 *.xcodeproj
 *.xcworkspace

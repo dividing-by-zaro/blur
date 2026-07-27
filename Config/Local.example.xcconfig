@@ -1,0 +1,19 @@
+// Template for Config/Local.xcconfig — copy it before generating the project:
+//
+//     cp Config/Local.example.xcconfig Config/Local.xcconfig
+//
+// Local.xcconfig is gitignored. It holds the values that identify *your* Apple
+// developer account, which is why they don't belong in project.yml: that file
+// is committed, so a bundle identifier or a team ID put there is published the
+// moment you push.
+
+// Reverse-DNS prefix for the app and its widget extension. The targets append
+// their own suffix, giving <prefix>.blur and <prefix>.blur.widget.
+BUNDLE_ID_PREFIX = com.example
+
+// Your 10-character Apple Developer Team ID, from the membership page at
+// developer.apple.com, or Xcode › Settings › Accounts.
+//
+// Leave it empty to let Xcode pick a team from whatever account is signed in,
+// which is usually what you want for a personal build.
+DEVELOPMENT_TEAM =
