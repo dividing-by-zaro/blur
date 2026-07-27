@@ -1,0 +1,13 @@
+# XcodeGen output — regenerate with `xcodegen generate`
+*.xcodeproj
+*.xcworkspace
+
+# Intermediate build products from the asset generators
+Tools/build/
+
+# Xcode
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+.DS_Store
