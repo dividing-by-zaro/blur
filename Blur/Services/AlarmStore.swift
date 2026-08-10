@@ -24,22 +24,28 @@ final class AlarmStore {
     init(center: AlarmCenter = .shared) {
         self.center = center
         load()
+        ingestPendingFireObservations()
+        center.observeAlarmAlerts { [weak self] ids, observedAt in
+            self?.recordAlertingAlarms(ids, observedAt: observedAt)
+        }
     }
 
-    // MARK: - Sections
+    // MARK: - Lists
 
-    func alarms(in section: AlarmSection) -> [AlarmEntry] {
-        alarms
-            .filter { $0.section == section }
-            .sorted { lhs, rhs in
-                // Chronological by time of day, then by label for a stable order.
-                if lhs.hour != rhs.hour { return lhs.hour < rhs.hour }
-                if lhs.minute != rhs.minute { return lhs.minute < rhs.minute }
-                return lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel) == .orderedAscending
-            }
+    /// Enabled alarms stay manageable while they build history. Once an alarm
+    /// reaches five rings it moves to Frequent, so the two lists never repeat a
+    /// row. Inactive alarms below the threshold remain persisted but hidden.
+    func scheduledAlarms(sortedBy order: AlarmSortOrder) -> [AlarmEntry] {
+        sorted(alarms.filter { $0.isEnabled && !$0.isFrequentlyUsed }, by: order)
     }
 
-    var isEmpty: Bool { alarms.isEmpty }
+    func frequentAlarms(sortedBy order: AlarmSortOrder) -> [AlarmEntry] {
+        sorted(alarms.filter(\.isFrequentlyUsed), by: order)
+    }
+
+    var isEmpty: Bool {
+        !alarms.contains { $0.isEnabled || $0.isFrequentlyUsed }
+    }
 
     /// The soonest upcoming enabled alarm, shown in the header.
     var nextAlarm: (entry: AlarmEntry, date: Date)? {
@@ -52,26 +58,52 @@ final class AlarmStore {
     // MARK: - Mutations
 
     func add(_ entry: AlarmEntry) async {
-        alarms.append(entry)
+        // A clock time is a remembered alarm. Re-creating (for example) a 7:00
+        // one-off revives that record rather than starting its usage at zero.
+        if let index = alarms.firstIndex(where: {
+            $0.hour == entry.hour && $0.minute == entry.minute
+        }) {
+            let remembered = alarms[index]
+            var replacement = entry
+            replacement.id = remembered.id
+            replacement.createdAt = remembered.createdAt
+            replacement.fireCount = remembered.fireCount
+            replacement.lastCountedOccurrence = remembered.lastCountedOccurrence
+            replacement.armedFor = nil
+            center.cancel(id: remembered.id)
+            alarms[index] = replacement
+        } else {
+            alarms.append(entry)
+        }
         save()
-        if entry.isEnabled {
-            await applySchedule(for: entry)
+        guard let saved = alarms.first(where: {
+            $0.hour == entry.hour && $0.minute == entry.minute
+        }) else { return }
+        if saved.isEnabled {
+            await applySchedule(for: saved)
         }
     }
 
     func update(_ entry: AlarmEntry) async {
         guard let index = alarms.firstIndex(where: { $0.id == entry.id }) else { return }
-        alarms[index] = entry
+        let remembered = alarms[index]
+        var replacement = entry
+        // A ringing update can arrive while the editor is open. The editor's
+        // stale draft must never roll usage history backwards when it saves.
+        replacement.createdAt = remembered.createdAt
+        replacement.fireCount = remembered.fireCount
+        replacement.lastCountedOccurrence = remembered.lastCountedOccurrence
+        alarms[index] = replacement
         save()
 
         // Any edit re-creates the AlarmKit alarm from scratch. Cheaper to reason
         // about than diffing which fields changed, and guarantees the scheduled
         // alarm matches the entry exactly.
         center.cancel(id: entry.id)
-        if entry.isEnabled {
-            await applySchedule(for: entry)
+        if replacement.isEnabled {
+            await applySchedule(for: replacement)
         } else {
-            unreliableIDs.remove(entry.id)
+            unreliableIDs.remove(replacement.id)
         }
     }
 
@@ -106,6 +138,9 @@ final class AlarmStore {
 
     /// Stops an alarm that is currently ringing or snoozed.
     func stopRinging(_ entry: AlarmEntry) {
+        if center.state(for: entry.id) == .alerting {
+            recordAlertingAlarms([entry.id], observedAt: Date())
+        }
         center.stop(id: entry.id)
     }
 
@@ -118,6 +153,7 @@ final class AlarmStore {
     /// fires, and the system may drop alarms if authorization was revoked — so
     /// this is the mechanism that makes "the toggle is on" mean "it will ring".
     func reconcile() async {
+        ingestPendingFireObservations()
         center.refreshLiveAlarms()
         guard center.isAuthorized else {
             // Without permission nothing is scheduled; flag every enabled alarm
@@ -138,6 +174,9 @@ final class AlarmStore {
                 && (entry.armedFor.map { $0 <= now } ?? false)
 
             if firedAndDone {
+                if let occurrence = entry.armedFor {
+                    recordFire(for: entry.id, occurrence: occurrence)
+                }
                 if let index = alarms.firstIndex(where: { $0.id == entry.id }) {
                     alarms[index].isEnabled = false
                     alarms[index].armedFor = nil
@@ -181,6 +220,70 @@ final class AlarmStore {
             alarms[index].armedFor = nil
         }
         save()
+    }
+
+    // MARK: - Usage history
+
+    private func recordAlertingAlarms(_ ids: Set<UUID>, observedAt: Date) {
+        var changed = false
+
+        for id in ids {
+            guard let entry = alarms.first(where: { $0.id == id }) else { continue }
+            let occurrence = entry.mostRecentOccurrence(onOrBefore: observedAt) ?? observedAt
+            changed = recordFire(for: id, occurrence: occurrence) || changed
+        }
+
+        if changed { save() }
+    }
+
+    private func ingestPendingFireObservations() {
+        var changed = false
+
+        for observation in AlarmFireObservation.consume() {
+            guard let entry = alarms.first(where: { $0.id == observation.id }) else { continue }
+            let occurrence = entry.mostRecentOccurrence(onOrBefore: observation.observedAt)
+                ?? observation.observedAt
+            changed = recordFire(for: observation.id, occurrence: occurrence) || changed
+        }
+
+        if changed { save() }
+    }
+
+    @discardableResult
+    private func recordFire(for id: UUID, occurrence: Date) -> Bool {
+        guard let index = alarms.firstIndex(where: { $0.id == id }) else { return false }
+
+        if let last = alarms[index].lastCountedOccurrence,
+           abs(last.timeIntervalSince(occurrence)) < 60 {
+            return false
+        }
+
+        alarms[index].fireCount = min(
+            alarms[index].fireCount + 1,
+            AlarmEntry.maximumFireCount
+        )
+        alarms[index].lastCountedOccurrence = occurrence
+        return true
+    }
+
+    // MARK: - Sorting
+
+    private func sorted(
+        _ entries: [AlarmEntry],
+        by order: AlarmSortOrder
+    ) -> [AlarmEntry] {
+        entries.sorted { lhs, rhs in
+            switch order {
+            case .mostUsed:
+                if lhs.fireCount != rhs.fireCount { return lhs.fireCount > rhs.fireCount }
+            case .time:
+                break
+            }
+
+            if lhs.hour != rhs.hour { return lhs.hour < rhs.hour }
+            if lhs.minute != rhs.minute { return lhs.minute < rhs.minute }
+            return lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel) == .orderedAscending
+        }
     }
 
     // MARK: - Persistence

@@ -47,13 +47,17 @@ struct RootView: View {
         }
     }
 
-    /// The tab bar picks up the accent of whichever screen you're on, so the
-    /// three accents each get a moment rather than fighting on one screen.
+    /// The tab bar picks up the accent of whichever screen you're on, so each
+    /// accent gets a moment rather than all of them fighting on one screen.
+    ///
+    /// The tab bar is a light frosted strip, so every tint here is a pair's
+    /// dark form — lilac at 1.9:1 would vanish into its own background, plum
+    /// clears 6.8:1.
     private var tintForSelection: Color {
         switch selection {
-        case .alarms:    return Blur.pink
-        case .timer:     return Blur.green
-        case .stopwatch: return Blur.yellow
+        case .alarms:    return Blur.blue
+        case .timer:     return Blur.plum
+        case .stopwatch: return Blur.taupe
         }
     }
 

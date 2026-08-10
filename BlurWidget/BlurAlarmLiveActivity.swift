@@ -12,10 +12,17 @@ struct BlurAlarmLiveActivity: Widget {
         ActivityConfiguration(for: AlarmAttributes<BlurAlarmMetadata>.self) { context in
             LockScreenView(attributes: context.attributes, state: context.state)
                 .padding(16)
-                .activityBackgroundTint(Blur.surface)
-                .activitySystemActionForegroundColor(Blur.ink)
+                // Charcoal rather than the app's ivory. The lock screen sits on
+                // whatever wallpaper the user chose, and a dark card is the one
+                // surface that holds its contrast against all of them — it's
+                // also the app's own focal-object treatment, so a running timer
+                // looks the same here as it does in the list.
+                .activityBackgroundTint(Blur.charcoal)
+                .activitySystemActionForegroundColor(Blur.onDark)
         } dynamicIsland: { context in
-            let tint = context.attributes.tintColor
+            // The Island is dark too, so it resolves exactly like the lock
+            // screen — one rule instead of two.
+            let tint = Blur.onCharcoal(context.attributes.tintColor)
 
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
@@ -33,7 +40,7 @@ struct BlurAlarmLiveActivity: Widget {
 
                 DynamicIslandExpandedRegion(.center) {
                     Text(context.attributes.metadata?.displayTitle ?? "Blur")
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .font(.blurRounded(15, weight: .semibold))
                         .lineLimit(1)
                 }
 
@@ -61,20 +68,19 @@ private struct LockScreenView: View {
     let attributes: AlarmAttributes<BlurAlarmMetadata>
     let state: AlarmPresentationState
 
-    /// The Dynamic Island is always dark, so the raw accent reads well there.
-    /// This surface is the app's white card, where lime and yellow vanish —
-    /// everything drawn here goes through `onCanvas` instead.
-    private var tint: Color { Blur.onCanvas(attributes.tintColor) }
-    private var wash: Color { attributes.tintColor }
+    /// This surface is charcoal, same as the Dynamic Island, so both go through
+    /// `onCharcoal` — blue lightens to pale denim and charcoal itself has to
+    /// give way entirely, since an accent can't be the colour it's drawn on.
+    private var tint: Color { Blur.onCharcoal(attributes.tintColor) }
     private var metadata: BlurAlarmMetadata? { attributes.metadata }
 
     var body: some View {
         HStack(spacing: 14) {
             ZStack {
-                // A pale wash of the true accent still reads as a colour field,
-                // so the alarm keeps its identity even though the glyph is ink.
                 Circle()
-                    .fill(wash.opacity(0.18))
+                    .fill(Blur.charcoalSoft)
+                Stipple(color: tint, spacing: 5, opacity: 0.16, seed: 0x1AC7_0001)
+                    .clipShape(Circle())
                 Image(systemName: metadata?.kind == .timer ? "timer" : "alarm.fill")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(tint)
@@ -83,8 +89,8 @@ private struct LockScreenView: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(metadata?.displayTitle ?? "Blur")
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
-                    .foregroundStyle(Blur.ink)
+                    .font(.blurRounded(16, weight: .bold))
+                    .foregroundStyle(Blur.onDark)
                     .lineLimit(1)
 
                 ModeReadout(state: state, tint: tint, size: 26)
@@ -115,20 +121,18 @@ private struct ModeReadout: View {
                      pauseTime: nil,
                      countsDown: true,
                      showsHours: countdown.totalCountdownDuration >= 3600)
-                    .font(.system(size: size, weight: .bold, design: .rounded))
-                    .monospacedDigit()
+                    .font(.blurDigits(size, weight: .bold))
                     .foregroundStyle(tint)
 
             case .paused(let paused):
                 let remaining = max(0, paused.totalCountdownDuration - paused.previouslyElapsedDuration)
                 Text(Self.clock(remaining))
-                    .font(.system(size: size, weight: .bold, design: .rounded))
-                    .monospacedDigit()
+                    .font(.blurDigits(size, weight: .bold))
                     .foregroundStyle(tint.opacity(0.75))
 
             case .alert:
                 Text("Now")
-                    .font(.system(size: size, weight: .bold, design: .rounded))
+                    .font(.blurRounded(size, weight: .bold))
                     .foregroundStyle(tint)
             }
         }
@@ -189,9 +193,10 @@ private struct ControlRow: View {
         Button(intent: intent) {
             Image(systemName: systemName)
                 .font(.system(size: 15, weight: .bold))
-                // Depends on the fill, not the surface, so it holds up in both
-                // the dark Dynamic Island and on the white lock screen.
-                .foregroundStyle(filled ? Blur.onAccent(tint) : tint)
+                // `tint` has already been resolved against charcoal, so it's
+                // always a light colour: a filled circle of it carries charcoal,
+                // and an unfilled one carries the tint itself.
+                .foregroundStyle(filled ? Blur.charcoal : tint)
                 .frame(width: 40, height: 40)
                 .background(Circle().fill(filled ? tint : tint.opacity(0.15)))
         }

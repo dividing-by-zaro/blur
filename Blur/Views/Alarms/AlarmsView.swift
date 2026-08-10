@@ -8,11 +8,15 @@ struct AlarmsView: View {
 
     @State private var editing: AlarmEntry?
     @State private var isCreating = false
+    @AppStorage("blur.alarmSortOrder") private var sortOrderRaw = AlarmSortOrder.mostUsed.rawValue
 
     var body: some View {
-        BlurScreen(title: "Alarms", subtitle: nextAlarmSubtitle) {
-            BlurIconButton(systemName: "plus") { isCreating = true }
-                .accessibilityLabel("Add alarm")
+        BlurScreen(title: "Alarms", subtitle: store.isEmpty ? nil : "Frequent after 5 rings") {
+            HStack(spacing: 8) {
+                sortMenu
+                BlurIconButton(systemName: "plus") { isCreating = true }
+                    .accessibilityLabel("Add alarm")
+            }
         } content: {
             if !center.isAuthorized {
                 BlurWarningBanner(
@@ -26,38 +30,16 @@ struct AlarmsView: View {
                 BlurEmptyState(
                     systemName: "alarm",
                     title: "No alarms yet",
-                    message: "Add one and it'll ring through silent mode and Focus."
+                    message: "Scheduled alarms appear right away. After one rings 5 times, Blur remembers it as Frequent."
                 )
-                .padding(.top, 20)
+                .padding(.top, 16)
             } else {
-                // Daily and Frequent sit at the top; Other collects one-offs.
-                ForEach(AlarmSection.allCases) { section in
-                    let entries = store.alarms(in: section)
-                    if !entries.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            SectionHeader(
-                                title: section.title,
-                                accent: color(for: section),
-                                count: entries.count
-                            )
-
-                            VStack(spacing: 10) {
-                                ForEach(entries) { entry in
-                                    AlarmRow(
-                                        entry: entry,
-                                        accent: color(for: section),
-                                        isUnreliable: store.unreliableIDs.contains(entry.id),
-                                        onToggle: { isOn in
-                                            Task { await store.setEnabled(isOn, for: entry) }
-                                        },
-                                        onTap: { editing = entry },
-                                        onDelete: { store.delete(entry) }
-                                    )
-                                }
-                            }
-                        }
-                    }
+                if let next = store.nextAlarm {
+                    NextAlarmCard(entry: next.entry, date: next.date)
                 }
+
+                scheduledGroup
+                frequentGroup
             }
         }
         .sheet(isPresented: $isCreating) {
@@ -68,20 +50,100 @@ struct AlarmsView: View {
         }
     }
 
-    private var nextAlarmSubtitle: String? {
-        guard let next = store.nextAlarm else { return nil }
-        let relative = next.date.formatted(
-            .relative(presentation: .named, unitsStyle: .wide)
-        )
-        return "Next: \(next.entry.displayLabel) \(relative)"
+    // MARK: Groups
+
+    @ViewBuilder
+    private var scheduledGroup: some View {
+        let entries = store.scheduledAlarms(sortedBy: sortOrder)
+        if !entries.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionHeader(title: "Scheduled",
+                              accent: Blur.lilac,
+                              count: entries.count)
+
+                VStack(spacing: 0) {
+                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                        if index > 0 {
+                            Rectangle()
+                                .fill(Blur.onDarkLine)
+                                .frame(height: 1)
+                                .padding(.leading, 4)
+                        }
+
+                        AlarmRow(
+                            entry: entry,
+                            accent: Blur.lilac,
+                            surface: .dark,
+                            isUnreliable: store.unreliableIDs.contains(entry.id),
+                            onToggle: { isOn in
+                                Task { await store.setEnabled(isOn, for: entry) }
+                            },
+                            onTap: { editing = entry },
+                            onDelete: { store.delete(entry) }
+                        )
+                        .padding(.vertical, 12)
+                    }
+                }
+                .blurCard(.dark, padding: 16)
+            }
+        }
     }
 
-    private func color(for section: AlarmSection) -> Color {
-        switch section.accent {
-        case .pink:   return Blur.pink
-        case .green:  return Blur.green
-        case .yellow: return Blur.yellow
+    @ViewBuilder
+    private var frequentGroup: some View {
+        let entries = store.frequentAlarms(sortedBy: sortOrder)
+        if !entries.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionHeader(title: "Frequent",
+                              accent: Blur.blue,
+                              count: entries.count)
+
+                VStack(spacing: 10) {
+                    ForEach(entries) { entry in
+                        AlarmRow(
+                            entry: entry,
+                            accent: Blur.blue,
+                            surface: .light,
+                            isUnreliable: store.unreliableIDs.contains(entry.id),
+                            onToggle: { isOn in
+                                Task { await store.setEnabled(isOn, for: entry) }
+                            },
+                            onTap: { editing = entry },
+                            onDelete: { store.delete(entry) }
+                        )
+                        .blurCard(.light)
+                    }
+                }
+            }
         }
+    }
+
+    private var sortOrder: AlarmSortOrder {
+        AlarmSortOrder(rawValue: sortOrderRaw) ?? .mostUsed
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            Picker("Sort alarms", selection: $sortOrderRaw) {
+                ForEach(AlarmSortOrder.allCases) { order in
+                    Text(order.title).tag(order.rawValue)
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.system(size: 11, weight: .bold))
+                Text(sortOrder.title)
+                    .font(.blurRounded(12, weight: .bold))
+            }
+            .foregroundStyle(Blur.ink)
+            .padding(.horizontal, 12)
+            .frame(height: 38)
+            .background(Capsule().fill(.regularMaterial))
+            .overlay(Capsule().strokeBorder(Blur.hairline, lineWidth: 1))
+        }
+        .accessibilityLabel("Sort alarms")
+        .accessibilityValue(sortOrder.title)
     }
 
     private func openSettings() {
@@ -90,52 +152,129 @@ struct AlarmsView: View {
     }
 }
 
+// MARK: - Next alarm
+
+/// The screen's one summary object, in the shape of the reference's status
+/// card: a light panel with a single number carrying it and everything else
+/// dropped back to a label.
+private struct NextAlarmCard: View {
+    let entry: AlarmEntry
+    let date: Date
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("NEXT ALARM")
+                    .font(.blurRounded(11, weight: .bold))
+                    .tracking(1.4)
+                    .foregroundStyle(Blur.inkFaint)
+
+                Text(entry.timeText)
+                    .font(.blurDigits(40, weight: .bold))
+                    .foregroundStyle(Blur.ink)
+
+                Text("\(entry.displayLabel) · \(relative)")
+                    .font(.blurRounded(13, weight: .medium))
+                    .foregroundStyle(Blur.inkSoft)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+
+            // A three-quarter turn of periwinkle over a tan track: enough
+            // colour to anchor the card without putting type on a light fill.
+            ZStack {
+                Circle()
+                    .stroke(Blur.tan.opacity(0.6), lineWidth: 10)
+                Circle()
+                    .trim(from: 0, to: 0.72)
+                    .stroke(Blur.wave, style: StrokeStyle(lineWidth: 10, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Image(systemName: "alarm.fill")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(Blur.ink)
+            }
+            .frame(width: 68, height: 68)
+        }
+        .blurCard(.light, padding: 18)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Next alarm, \(entry.displayLabel) at \(entry.timeText), \(relative)")
+    }
+
+    private var relative: String {
+        date.formatted(.relative(presentation: .named, unitsStyle: .wide))
+    }
+}
+
 // MARK: - Row
 
 struct AlarmRow: View {
     let entry: AlarmEntry
     let accent: Color
+    var surface: BlurSurface = .light
     let isUnreliable: Bool
     let onToggle: (Bool) -> Void
     let onTap: () -> Void
     let onDelete: () -> Void
 
+    /// The accent resolved for whichever surface the row landed on — blue
+    /// lightens to pale denim on charcoal, yellow stays gold there but drops to
+    /// amber on ivory.
+    private var tint: Color { surface.tint(accent) }
+
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
+            // Enabled alarms carry a short accent bar; disabled ones leave the
+            // slot empty so the row still occupies the same width.
+            Capsule()
+                .fill(entry.isEnabled ? tint : Color.clear)
+                .frame(width: 3, height: 40)
+
             Button(action: onTap) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(entry.timeText)
                         .font(.blurDigits(30, weight: .bold))
                         // Disabled alarms fade rather than disappear, so the row
                         // still reads at a glance.
-                        .foregroundStyle(entry.isEnabled ? Blur.ink : Blur.inkFaint)
+                        .foregroundStyle(entry.isEnabled ? surface.ink : surface.inkFaint)
 
                     HStack(spacing: 6) {
                         Text(entry.displayLabel)
                             .font(.blurRounded(14, weight: .semibold))
-                            .foregroundStyle(entry.isEnabled ? accent : Blur.inkFaint)
+                            .foregroundStyle(entry.isEnabled ? tint : surface.inkFaint)
                             .lineLimit(1)
 
                         Text("·")
-                            .foregroundStyle(Blur.inkFaint)
+                            .foregroundStyle(surface.inkFaint)
 
                         Text(entry.repeatDescription)
                             .font(.blurRounded(13, weight: .medium))
-                            .foregroundStyle(Blur.inkSoft)
+                            .foregroundStyle(surface.inkSoft)
                             .lineLimit(1)
                     }
+
+                    HStack(spacing: 5) {
+                        Image(systemName: "bell.fill")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("\(entry.fireCountText) \(entry.fireCount == 1 ? "ring" : "rings")")
+                            .font(.blurDigits(11, weight: .bold))
+                    }
+                    .foregroundStyle(tint)
 
                     if entry.tone == .silent {
                         Label("No tone", systemImage: "bell.slash.fill")
                             .font(.blurRounded(11, weight: .semibold))
-                            .foregroundStyle(Blur.inkFaint)
+                            .foregroundStyle(surface.inkFaint)
                     }
 
                     if isUnreliable {
                         Label("Not scheduled — tap to fix",
                               systemImage: "exclamationmark.triangle.fill")
                             .font(.blurRounded(11, weight: .bold))
-                            .foregroundStyle(Blur.pink)
+                            // Clay is a dark warm red — on charcoal it drops to
+                            // 2.7:1, so the pair's light form takes over.
+                            .foregroundStyle(surface.tint(Blur.clay))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -145,17 +284,9 @@ struct AlarmRow: View {
 
             Toggle("", isOn: Binding(get: { entry.isEnabled }, set: onToggle))
                 .labelsHidden()
-                .tint(accent)
-        }
-        .blurCard()
-        .overlay(alignment: .leading) {
-            // Thin accent edge; the only colour on an otherwise white card.
-            if entry.isEnabled {
-                Capsule()
-                    .fill(accent)
-                    .frame(width: 3, height: 34)
-                    .padding(.leading, 5)
-            }
+                // The track is a fill, and the knob on it is white, so this
+                // wants the light form on either surface.
+                .tint(Blur.onCharcoal(accent))
         }
         .contextMenu {
             Button("Edit", systemImage: "pencil", action: onTap)
@@ -163,6 +294,12 @@ struct AlarmRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(entry.displayLabel), \(entry.timeText), \(entry.repeatDescription)")
-        .accessibilityValue(entry.isEnabled ? "On" : "Off")
+        .accessibilityValue("\(entry.isEnabled ? "On" : "Off"), \(fireCountAccessibility)")
+    }
+
+    private var fireCountAccessibility: String {
+        entry.fireCount >= AlarmEntry.maximumFireCount
+            ? "99 or more rings"
+            : "\(entry.fireCount) \(entry.fireCount == 1 ? "ring" : "rings")"
     }
 }

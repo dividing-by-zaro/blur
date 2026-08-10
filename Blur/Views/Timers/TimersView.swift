@@ -20,9 +20,8 @@ struct TimersView: View {
 
         BlurScreen(title: "Timer", subtitle: subtitle) {
             if !store.running.isEmpty {
-                Button("Clear") { store.cancelAll() }
-                    .font(.blurRounded(15, weight: .semibold))
-                    .foregroundStyle(Blur.inkSoft)
+                BlurGlassButton(systemName: "xmark") { store.cancelAll() }
+                    .accessibilityLabel("Clear all timers")
             }
         } content: {
             if !center.isAuthorized {
@@ -37,7 +36,7 @@ struct TimersView: View {
             if !store.running.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
                     SectionHeader(title: "Running",
-                                  accent: Blur.green,
+                                  accent: Blur.blue,
                                   count: store.running.count)
 
                     ForEach(store.running) { entry in
@@ -70,38 +69,20 @@ struct TimersView: View {
 
     private var quickTimers: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(title: "Quick Timers", accent: Blur.pink)
+            SectionHeader(title: "Quick Timers", accent: Blur.lilac)
 
             LazyVGrid(columns: columns, spacing: 10) {
                 ForEach(Array(TimerPreset.all.enumerated()), id: \.element.id) { index, preset in
-                    // One colour per row, not per tile — the grid reads as three
-                    // bands (short / medium / long) instead of a checkerboard.
-                    let accent = Blur.accent(index / columnCount)
-
-                    Button {
+                    // One surface per row, not per tile: the grid darkens as the
+                    // durations get longer — ivory for minutes, lavender for the
+                    // quarter-hours, charcoal for the hours. It reads as three
+                    // bands rather than a checkerboard, and the weight of the
+                    // tile tells you roughly how long the timer is before you've
+                    // read the number.
+                    PresetTile(preset: preset, band: index / columnCount) {
                         Task { await store.start(preset: preset) }
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    } label: {
-                        VStack(spacing: 1) {
-                            Text(preset.title)
-                                .font(.blurDigits(20, weight: .bold))
-                            if !preset.unit.isEmpty {
-                                Text(preset.unit)
-                                    .font(.blurRounded(9, weight: .semibold))
-                                    .opacity(0.8)
-                            }
-                        }
-                        .foregroundStyle(Blur.onAccent(accent))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 58)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(accent)
-                        )
-                        .blurGlow(accent, radius: 8, opacity: 0.3)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(preset.accessibilityLabel)
                 }
             }
         }
@@ -119,21 +100,22 @@ struct TimersView: View {
                         .font(.blurRounded(11, weight: .bold))
                         .tracking(0.8)
                         .foregroundStyle(Blur.inkFaint)
-                    Spacer()
+                    Spacer(minLength: 8)
                     Text("Applies to new timers")
                         .font(.blurRounded(11, weight: .medium))
                         .foregroundStyle(Blur.inkFaint)
+                        .lineLimit(1)
                 }
 
-                TonePickerRow(selection: $store.selectedTone, accent: Blur.green)
+                TonePickerRow(selection: $store.selectedTone, accent: Blur.blue)
             }
 
             BlurField(title: "Label (optional)",
                       text: $store.pendingLabel,
                       placeholder: "Pasta, laundry, focus…",
-                      accent: Blur.green)
+                      accent: Blur.blue)
         }
-        .blurCard()
+        .blurCard(.glass)
     }
 
     // MARK: Custom
@@ -144,7 +126,7 @@ struct TimersView: View {
     /// never has to hold a microphone permission of its own.
     private var customTimer: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SectionHeader(title: "Custom", accent: Blur.yellow)
+            SectionHeader(title: "Custom", accent: Blur.charcoal)
 
             VStack(alignment: .leading, spacing: 14) {
                 TextField(fieldPrompt, text: $customText, axis: .vertical)
@@ -152,9 +134,9 @@ struct TimersView: View {
                     .autocorrectionDisabled()
                     .lineLimit(1...3)
                     .submitLabel(.done)
-                    .font(.blurRounded(21, weight: .bold))
+                    .font(.blurRounded(21, weight: .semibold))
                     .foregroundStyle(Blur.ink)
-                    .tint(Blur.pink)
+                    .tint(Blur.blue)
                     .focused($customFieldFocused)
                     .accessibilityLabel("Timer description")
                     .onChange(of: customFieldFocused) { _, focused in
@@ -169,9 +151,8 @@ struct TimersView: View {
                 Button(parser.isThinking ? "Reading…" : "Start Timer") { startCustom() }
                     .buttonStyle(BlurPrimaryButtonStyle())
                     .disabled(!canStart)
-                    .opacity(canStart ? 1 : 0.45)
             }
-            .blurCard()
+            .blurCard(.light)
         }
     }
 
@@ -262,15 +243,85 @@ struct TimersView: View {
     }
 }
 
+// MARK: - Preset tile
+
+/// One tile in the quick-timer grid. `band` is the row index, which is the only
+/// thing that decides how the tile is drawn.
+private struct PresetTile: View {
+    let preset: TimerPreset
+    let band: Int
+    let action: () -> Void
+
+    private var surface: BlurSurface { band >= 2 ? .dark : .light }
+
+    /// Row 1 is the one filled tile — a flat lavender field with ink numerals.
+    private var isFilled: Bool { band == 1 }
+
+    private var label: Color {
+        if isFilled { return Blur.ink }
+        return band >= 2 ? Blur.tan : Blur.ink
+    }
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 0) {
+                Text(preset.title)
+                    .font(.blurDigits(21, weight: .bold))
+                if !preset.unit.isEmpty {
+                    Text(preset.unit)
+                        .font(.blurRounded(9, weight: .semibold))
+                        .opacity(0.72)
+                }
+            }
+            .foregroundStyle(label)
+            .frame(maxWidth: .infinity)
+            .frame(height: 60)
+            .background {
+                let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+                ZStack {
+                    switch (isFilled, surface) {
+                    case (true, _):    shape.fill(Blur.lilac)
+                    case (_, .dark):   shape.fill(Blur.charcoal)
+                    default:           shape.fill(Blur.surface.opacity(0.92))
+                    }
+
+                    Stipple(color: label,
+                            spacing: 5,
+                            opacity: surface == .dark ? 0.13 : 0.09,
+                            seed: UInt64(preset.minutes) &* 0x9E37_79B1)
+                        .clipShape(shape)
+                }
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(surface == .dark ? Blur.onDarkLine : Blur.hairline,
+                                  lineWidth: 1)
+            )
+            .shadow(color: Color(red: 0.35, green: 0.28, blue: 0.16).opacity(0.10),
+                    radius: 8, x: 0, y: 4)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(preset.accessibilityLabel)
+    }
+}
+
 // MARK: - Running timer card
 
+/// A live timer is the loudest thing on the screen, so it gets the dark card —
+/// the same role the reference gives its session-history panel.
 struct RunningTimerCard: View {
     let entry: TimerEntry
     let isRinging: Bool
     let onToggle: () -> Void
     let onCancel: () -> Void
 
-    private var accent: Color { Blur.accent(entry.accentIndex) }
+    /// Resolved against charcoal, since that's the only surface this card has.
+    /// A timer that has finished drops its own accent for gold — the one state
+    /// in the app that should read as louder than everything around it, and the
+    /// reason gold is still in the palette at all.
+    private var accent: Color {
+        isRinging ? Blur.yellow : Blur.onCharcoal(Blur.accent(entry.accentIndex))
+    }
 
     var body: some View {
         // Redraws once a second; the countdown itself is date-derived so it
@@ -282,29 +333,29 @@ struct RunningTimerCard: View {
             HStack(spacing: 14) {
                 ZStack {
                     Circle()
-                        .stroke(Blur.hairline, lineWidth: 5)
+                        .stroke(Blur.onDarkLine, lineWidth: 5)
                     Circle()
                         .trim(from: 0, to: entry.progress(at: now))
                         .stroke(accent, style: StrokeStyle(lineWidth: 5, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                 }
-                .frame(width: 44, height: 44)
+                .frame(width: 46, height: 46)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(isRinging ? "Done" : Self.clock(remaining))
-                        .font(.blurDigits(26, weight: .bold))
-                        .foregroundStyle(isRinging ? Blur.onCanvas(accent) : Blur.ink)
+                        .font(.blurDigits(27, weight: .bold))
+                        .foregroundStyle(isRinging ? accent : Blur.onDark)
 
                     HStack(spacing: 5) {
                         Text(entry.displayLabel)
                             .font(.blurRounded(13, weight: .semibold))
-                            .foregroundStyle(Blur.inkSoft)
+                            .foregroundStyle(Blur.onDarkSoft)
                             .lineLimit(1)
 
                         if entry.isPaused {
                             Text("· Paused")
                                 .font(.blurRounded(13, weight: .semibold))
-                                .foregroundStyle(Blur.onCanvas(accent))
+                                .foregroundStyle(accent)
                         }
                     }
                 }
@@ -315,9 +366,9 @@ struct RunningTimerCard: View {
                     Button(action: onToggle) {
                         Image(systemName: entry.isPaused ? "play.fill" : "pause.fill")
                             .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(Blur.onCanvas(accent))
+                            .foregroundStyle(accent)
                             .frame(width: 38, height: 38)
-                            .background(Circle().fill(accent.opacity(0.13)))
+                            .background(Circle().fill(Blur.charcoalSoft))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(entry.isPaused ? "Resume" : "Pause")
@@ -326,23 +377,21 @@ struct RunningTimerCard: View {
                 Button(action: onCancel) {
                     Image(systemName: isRinging ? "checkmark" : "xmark")
                         .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(isRinging ? Blur.onAccent(accent) : Blur.inkSoft)
+                        // `accent` is already resolved for charcoal, so it's
+                        // always one of the light tints — a glyph sitting on a
+                        // circle of it takes charcoal, never a light label.
+                        .foregroundStyle(isRinging ? Blur.charcoal : Blur.onDarkSoft)
                         .frame(width: 38, height: 38)
                         .background(
                             Circle().fill(isRinging
                                           ? AnyShapeStyle(accent)
-                                          : AnyShapeStyle(Blur.canvas))
-                        )
-                        .overlay(
-                            Circle().strokeBorder(
-                                isRinging ? Color.clear : Blur.hairline, lineWidth: 1
-                            )
+                                          : AnyShapeStyle(Blur.charcoalSoft))
                         )
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(isRinging ? "Dismiss" : "Cancel timer")
             }
-            .blurCard()
+            .blurCard(.dark)
         }
     }
 

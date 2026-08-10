@@ -62,47 +62,21 @@ enum Weekday: Int, Codable, CaseIterable, Identifiable, Hashable, Sendable {
     static let all: Set<Weekday> = Set(Weekday.allCases)
 }
 
-// MARK: - Section
+// MARK: - Sorting
 
-/// Which section of the alarms list an entry belongs to.
-///
-/// Derived from how often the alarm repeats rather than being set by hand — an
-/// alarm that runs every day *is* a daily alarm, and asking the user to also
-/// file it under "Daily" would be busywork.
-enum AlarmSection: String, Codable, CaseIterable, Identifiable, Sendable {
-    case daily
-    case frequent
-    case other
+enum AlarmSortOrder: String, CaseIterable, Identifiable, Sendable {
+    case mostUsed
+    case time
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .daily:    return "Daily"
-        case .frequent: return "Frequent"
-        case .other:    return "Other"
-        }
-    }
-
-    var subtitle: String {
-        switch self {
-        case .daily:    return "Every day"
-        case .frequent: return "Several days a week"
-        case .other:    return "One-offs and single days"
-        }
-    }
-
-    var accent: Color3 {
-        switch self {
-        case .daily:    return .pink
-        case .frequent: return .green
-        case .other:    return .yellow
+        case .mostUsed: return "Most used"
+        case .time:     return "Time"
         }
     }
 }
-
-/// Tiny indirection so the model layer doesn't have to import SwiftUI.
-enum Color3: Sendable { case pink, green, yellow }
 
 // MARK: - Alarm entry
 
@@ -111,6 +85,11 @@ enum Color3: Sendable { case pink, green, yellow }
 /// disabled alarm has no AlarmKit counterpart at all — it is unscheduled, and
 /// re-created when toggled back on.
 struct AlarmEntry: Identifiable, Codable, Hashable, Sendable {
+    /// Five observed rings earns a place in the remembered Frequent list.
+    static let frequentUseThreshold = 5
+    /// `100` is the internal sentinel displayed as "99+".
+    static let maximumFireCount = 100
+
     var id: UUID
     var label: String
     var hour: Int
@@ -121,6 +100,12 @@ struct AlarmEntry: Identifiable, Codable, Hashable, Sendable {
     /// Minutes added when the user taps Snooze; 0 disables the snooze button.
     var snoozeMinutes: Int
     var createdAt: Date
+    /// Number of distinct scheduled occurrences observed in AlarmKit's
+    /// `.alerting` state. Saturates at `100`, which the UI presents as "99+".
+    var fireCount: Int
+    /// The concrete occurrence represented by the last increment. AlarmKit can
+    /// enter `.alerting` again after a snooze, so this prevents double-counting.
+    var lastCountedOccurrence: Date?
     /// The concrete date this alarm was last scheduled for.
     ///
     /// Reconciliation needs it to tell two cases apart when AlarmKit no longer
@@ -139,6 +124,8 @@ struct AlarmEntry: Identifiable, Codable, Hashable, Sendable {
         isEnabled: Bool = true,
         snoozeMinutes: Int = 9,
         createdAt: Date = Date(),
+        fireCount: Int = 0,
+        lastCountedOccurrence: Date? = nil,
         armedFor: Date? = nil
     ) {
         self.id = id
@@ -150,18 +137,16 @@ struct AlarmEntry: Identifiable, Codable, Hashable, Sendable {
         self.isEnabled = isEnabled
         self.snoozeMinutes = snoozeMinutes
         self.createdAt = createdAt
+        self.fireCount = min(max(fireCount, 0), Self.maximumFireCount)
+        self.lastCountedOccurrence = lastCountedOccurrence
         self.armedFor = armedFor
     }
 
     // MARK: Derived
 
-    var section: AlarmSection {
-        switch days.count {
-        case 7:      return .daily      // every day
-        case 2...6:  return .frequent   // several days a week
-        default:     return .other      // never repeats, or a single day
-        }
-    }
+    var isFrequentlyUsed: Bool { fireCount >= Self.frequentUseThreshold }
+
+    var fireCountText: String { fireCount >= 100 ? "99+" : "\(fireCount)" }
 
     var hasSnooze: Bool { snoozeMinutes > 0 }
 
@@ -216,6 +201,64 @@ struct AlarmEntry: Identifiable, Codable, Hashable, Sendable {
             else { return nil }
             return candidate
         }.first
+    }
+
+    /// The scheduled occurrence responsible for an observed alert. Walking
+    /// backwards means a snooze still resolves to the original ring time.
+    func mostRecentOccurrence(onOrBefore observedAt: Date) -> Date? {
+        if days.isEmpty {
+            return armedFor
+        }
+
+        let calendar = Calendar.current
+        // AlarmKit updates can arrive just before the clock rolls to the exact
+        // minute, so allow a small tolerance without turning a snooze into a
+        // different occurrence.
+        let upperBound = observedAt.addingTimeInterval(60)
+
+        return (0..<8).lazy.compactMap { offset -> Date? in
+            guard let day = calendar.date(byAdding: .day, value: -offset, to: observedAt),
+                  let candidate = calendar.date(
+                      bySettingHour: hour, minute: minute, second: 0, of: day
+                  ),
+                  candidate <= upperBound,
+                  let weekday = Weekday(rawValue: calendar.component(.weekday, from: candidate)),
+                  days.contains(weekday)
+            else { return nil }
+            return candidate
+        }.first
+    }
+
+    // MARK: Codable migration
+
+    /// `fireCount` was added after the first persisted schema shipped. Decode
+    /// it permissively so existing alarms migrate with a zero count instead of
+    /// causing the whole saved list to be discarded.
+    private enum CodingKeys: String, CodingKey {
+        case id, label, hour, minute, days, tone, isEnabled, snoozeMinutes
+        case createdAt, fireCount, lastCountedOccurrence, armedFor
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        label = try values.decode(String.self, forKey: .label)
+        hour = try values.decode(Int.self, forKey: .hour)
+        minute = try values.decode(Int.self, forKey: .minute)
+        days = try values.decode(Set<Weekday>.self, forKey: .days)
+        tone = try values.decode(AlarmTone.self, forKey: .tone)
+        isEnabled = try values.decode(Bool.self, forKey: .isEnabled)
+        snoozeMinutes = try values.decode(Int.self, forKey: .snoozeMinutes)
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+        fireCount = min(
+            max(try values.decodeIfPresent(Int.self, forKey: .fireCount) ?? 0, 0),
+            Self.maximumFireCount
+        )
+        lastCountedOccurrence = try values.decodeIfPresent(
+            Date.self,
+            forKey: .lastCountedOccurrence
+        )
+        armedFor = try values.decodeIfPresent(Date.self, forKey: .armedFor)
     }
 
     // MARK: AlarmKit bridging

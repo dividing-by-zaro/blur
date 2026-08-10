@@ -2,6 +2,35 @@ import AppIntents
 import AlarmKit
 import Foundation
 
+/// A durable hand-off from AlarmKit's Stop intent to `AlarmStore`. The app can
+/// be suspended for the entire alert, so its live update stream is not the only
+/// evidence that an alarm genuinely rang.
+enum AlarmFireObservation {
+    private static let defaultsKey = "blur.pendingAlarmFireObservations.v1"
+    private struct Stored: Codable {
+        let id: UUID
+        let observedAt: Date
+    }
+
+    static func record(id: UUID, at date: Date = Date()) {
+        var observations = load()
+        observations.append(Stored(id: id, observedAt: date))
+        guard let data = try? JSONEncoder().encode(observations) else { return }
+        UserDefaults.standard.set(data, forKey: defaultsKey)
+    }
+
+    static func consume() -> [(id: UUID, observedAt: Date)] {
+        let observations = load()
+        UserDefaults.standard.removeObject(forKey: defaultsKey)
+        return observations.map { ($0.id, $0.observedAt) }
+    }
+
+    private static func load() -> [Stored] {
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey) else { return [] }
+        return (try? JSONDecoder().decode([Stored].self, from: data)) ?? []
+    }
+}
+
 /// Intents wired to the buttons AlarmKit renders on the lock screen, in the
 /// Dynamic Island, and on the full-screen alert.
 ///
@@ -28,6 +57,7 @@ struct StopAlarmIntent: LiveActivityIntent {
 
     func perform() async throws -> some IntentResult {
         if let id = UUID(uuidString: alarmID) {
+            AlarmFireObservation.record(id: id)
             try? AlarmManager.shared.stop(id: id)
         }
         return .result()

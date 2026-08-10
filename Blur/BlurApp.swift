@@ -20,7 +20,7 @@ struct BlurApp: App {
                 // The design is light-mode only; this keeps it that way even if
                 // the Info.plist style is ever changed.
                 .preferredColorScheme(.light)
-                .tint(Blur.pink)
+                .tint(Blur.blue)
                 .task {
                     await alarmCenter.ensureAuthorized()
                     await alarmStore.reconcile()

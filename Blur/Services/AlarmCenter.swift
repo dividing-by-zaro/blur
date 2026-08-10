@@ -26,6 +26,8 @@ final class AlarmCenter {
 
     private var observationTask: Task<Void, Never>?
     private var authorizationTask: Task<Void, Never>?
+    @ObservationIgnored private var currentlyAlertingIDs: Set<UUID> = []
+    @ObservationIgnored private var alarmAlertHandler: ((Set<UUID>, Date) -> Void)?
 
     private init() {
         authorization = AlarmManager.shared.authorizationState
@@ -73,10 +75,7 @@ final class AlarmCenter {
             for await alarms in AlarmManager.shared.alarmUpdates {
                 guard let self else { return }
                 await MainActor.run {
-                    self.liveAlarms = Dictionary(
-                        alarms.map { ($0.id, $0) },
-                        uniquingKeysWith: { _, latest in latest }
-                    )
+                    self.replaceLiveAlarms(with: alarms)
                 }
             }
         }
@@ -93,8 +92,31 @@ final class AlarmCenter {
     /// Synchronous read, used at launch before the stream has produced anything.
     func refreshLiveAlarms() {
         guard let alarms = try? AlarmManager.shared.alarms else { return }
-        liveAlarms = Dictionary(alarms.map { ($0.id, $0) },
-                                uniquingKeysWith: { _, latest in latest })
+        replaceLiveAlarms(with: alarms)
+    }
+
+    /// Installs the single alarm-store listener and immediately reports alarms
+    /// that were already ringing when the store was created.
+    func observeAlarmAlerts(_ handler: @escaping (Set<UUID>, Date) -> Void) {
+        alarmAlertHandler = handler
+        if !currentlyAlertingIDs.isEmpty {
+            handler(currentlyAlertingIDs, Date())
+        }
+    }
+
+    private func replaceLiveAlarms(with alarms: [Alarm]) {
+        liveAlarms = Dictionary(
+            alarms.map { ($0.id, $0) },
+            uniquingKeysWith: { _, latest in latest }
+        )
+
+        let alertingIDs = Set(alarms.lazy.filter { $0.state == .alerting }.map(\.id))
+        let newlyAlerting = alertingIDs.subtracting(currentlyAlertingIDs)
+        currentlyAlertingIDs = alertingIDs
+
+        if !newlyAlerting.isEmpty {
+            alarmAlertHandler?(newlyAlerting, Date())
+        }
     }
 
     // MARK: - Queries
@@ -225,6 +247,10 @@ final class AlarmCenter {
             let alarm = try await AlarmManager.shared.schedule(id: id,
                                                               configuration: configuration)
             liveAlarms[alarm.id] = alarm
+            if alarm.state == .alerting {
+                let wasInserted = currentlyAlertingIDs.insert(alarm.id).inserted
+                if wasInserted { alarmAlertHandler?([alarm.id], Date()) }
+            }
             lastError = nil
             return true
         } catch AlarmManager.AlarmError.maximumLimitReached {
@@ -242,6 +268,7 @@ final class AlarmCenter {
     func cancel(id: UUID) {
         try? AlarmManager.shared.cancel(id: id)
         liveAlarms[id] = nil
+        currentlyAlertingIDs.remove(id)
     }
 
     func stop(id: UUID) {

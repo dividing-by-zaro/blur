@@ -39,21 +39,19 @@ struct AlarmEditorView: View {
         _time = State(initialValue: Calendar.current.date(from: components) ?? Date())
     }
 
-    private var accent: Color {
-        switch draft.section {
-        case .daily:    return Blur.pink
-        case .frequent: return Blur.green
-        case .other:    return Blur.yellow
-        }
-    }
+    /// The editor is a light sheet throughout — it's the densest screen in the
+    /// app and every control on it is small — so wherever this is used as type
+    /// it goes through `onCanvas` and resolves to the pair's dark form. As a
+    /// chip *fill* it stays the light form, which is what carries ink.
+    private var accent: Color { Blur.blue }
 
     var body: some View {
         NavigationStack {
             ZStack {
-                Blur.canvas.ignoresSafeArea()
+                BlurBackdrop()
 
                 ScrollView {
-                    VStack(spacing: 20) {
+                    VStack(spacing: 18) {
                         timePicker
                         daysPicker
                         labelAndTone
@@ -63,7 +61,7 @@ struct AlarmEditorView: View {
                             Button("Delete Alarm", role: .destructive) {
                                 showDeleteConfirm = true
                             }
-                            .buttonStyle(BlurSecondaryButtonStyle(tint: Blur.pink))
+                            .buttonStyle(BlurSecondaryButtonStyle(tint: Blur.clay))
                             .padding(.top, 4)
                         }
                     }
@@ -71,17 +69,26 @@ struct AlarmEditorView: View {
                 }
                 .scrollDismissesKeyboard(.interactively)
             }
-            .navigationTitle(mode.isEditing ? "Edit Alarm" : "New Alarm")
             .navigationBarTitleDisplayMode(.inline)
+            // `.tint` rather than a `foregroundStyle` on each button: the
+            // confirmation action is drawn by the system as a prominent glass
+            // capsule, and that capsule takes its fill from the tint. Colouring
+            // the label alone leaves it system blue.
+            .tint(Blur.blue)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text(mode.isEditing ? "Edit Alarm" : "New Alarm")
+                        .font(.blurRounded(17, weight: .semibold))
+                        .foregroundStyle(Blur.ink)
+                }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .font(.blurRounded(16, weight: .medium))
                         .foregroundStyle(Blur.inkSoft)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }
-                        .font(.blurRounded(17, weight: .bold))
-                        .foregroundStyle(Blur.pink)
+                        .font(.blurRounded(16, weight: .bold))
                 }
             }
             .confirmationDialog("Delete this alarm?",
@@ -100,7 +107,7 @@ struct AlarmEditorView: View {
     // MARK: Sections
 
     private var timePicker: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
             DatePicker("", selection: $time, displayedComponents: .hourAndMinute)
                 .datePickerStyle(.wheel)
                 .labelsHidden()
@@ -108,9 +115,14 @@ struct AlarmEditorView: View {
             Text(nextFireHint)
                 .font(.blurRounded(13, weight: .semibold))
                 .foregroundStyle(Blur.onCanvas(accent))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(Blur.onCanvas(accent).opacity(0.10)))
         }
         .frame(maxWidth: .infinity)
-        .blurCard(padding: 12)
+        // No stipple here: the wheel picker draws its own selection band, and a
+        // texture running under it makes the digits fizz.
+        .blurCard(.light, padding: 12, stipple: false)
     }
 
     private var daysPicker: some View {
@@ -118,7 +130,7 @@ struct AlarmEditorView: View {
             HStack {
                 Text("REPEAT")
                     .font(.blurRounded(11, weight: .bold))
-                    .tracking(0.8)
+                    .tracking(1.2)
                     .foregroundStyle(Blur.inkFaint)
                 Spacer()
                 Text(draft.repeatDescription)
@@ -141,7 +153,7 @@ struct AlarmEditorView: View {
                             .background(
                                 Circle().fill(isOn
                                               ? AnyShapeStyle(accent)
-                                              : AnyShapeStyle(Blur.canvas))
+                                              : AnyShapeStyle(Blur.canvas.opacity(0.6)))
                             )
                             .overlay(
                                 Circle().strokeBorder(
@@ -179,7 +191,7 @@ struct AlarmEditorView: View {
                 .padding(.vertical, 7)
                 .background(Capsule().fill(isActive
                                            ? AnyShapeStyle(accent)
-                                           : AnyShapeStyle(Blur.canvas)))
+                                           : AnyShapeStyle(Blur.canvas.opacity(0.6))))
                 .overlay(Capsule().strokeBorder(
                     isActive ? Color.clear : Blur.hairline, lineWidth: 1
                 ))
@@ -197,7 +209,7 @@ struct AlarmEditorView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("TONE")
                     .font(.blurRounded(11, weight: .bold))
-                    .tracking(0.8)
+                    .tracking(1.2)
                     .foregroundStyle(Blur.inkFaint)
 
                 TonePickerRow(selection: $draft.tone, accent: accent)
@@ -217,7 +229,7 @@ struct AlarmEditorView: View {
             HStack {
                 Text("SNOOZE")
                     .font(.blurRounded(11, weight: .bold))
-                    .tracking(0.8)
+                    .tracking(1.2)
                     .foregroundStyle(Blur.inkFaint)
                 Spacer()
                 Text(draft.hasSnooze ? "\(draft.snoozeMinutes) min" : "Off")
@@ -237,7 +249,7 @@ struct AlarmEditorView: View {
                             .frame(maxWidth: .infinity)
                             .frame(height: 38)
                             .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(isActive ? AnyShapeStyle(accent) : AnyShapeStyle(Blur.canvas)))
+                                .fill(isActive ? AnyShapeStyle(accent) : AnyShapeStyle(Blur.canvas.opacity(0.6))))
                             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .strokeBorder(isActive ? Color.clear : Blur.hairline, lineWidth: 1))
                     }

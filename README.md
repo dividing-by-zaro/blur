@@ -115,18 +115,35 @@ Light mode only, by intent — every colour is a fixed literal rather than an
 adaptive asset, so the widget extension renders from exactly the same palette as
 the app.
 
-- **Accents** are pink `#FF1C82`, lime `#A0F109`, and yellow `#FFC90D`, cycled by
-  row so a grid reads as bands rather than a checkerboard.
-- **Two contrast rules** govern all three, in `Theme.swift`. `onAccent` picks
-  type sitting *on* an accent fill; `onCanvas` picks an accent used *as* type on
-  the light page. Lime and yellow are light colours — white on them lands at
-  1.4:1 and 1.6:1 — so both collapse to ink and stay fills only.
-- **The gradient runs pink → yellow → lime.** Pink and lime are near-opposites;
-  interpolating straight between them passes through olive sludge, so yellow
-  bridges them.
-- **Type is Futura**, the geometric sans Century Gothic was drawn from. It ships
-  with the system, and its digits are uniform width in both cuts, so countdowns
-  don't jitter.
+- **The page is sand** `#E7DFCF`, washed cool at the top and warm at the bottom
+  by four colour fields — deep sand, pale denim, lilac, tan — blurred past having
+  an edge. A stipple pass over the top, dots on a jittered grid rather than
+  scattered at random (which clumps and reads as dirt), gives it a tooth.
+- **Cards come in three surfaces**: ivory `#FBF7EF`, charcoal `#23211E`, and
+  frosted sand. Mixing light and dark cards on one screen is the main move, so
+  it's a `BlurSurface` value rather than a background colour per call site — the
+  surface resolves its own ink, hairlines, wells, and accent tints. At most one
+  dark card per screen: it marks the focal object (the next timer, scheduled
+  alarms, the running countdown on the lock screen).
+- **Every accent is a pair** — a light form that lives on charcoal and a dark
+  form of the same hue that lives on ivory — because no single mid-tone reads
+  against both a near-black card and a near-white one. Denim `#A9C2E8`/`#2B5AA0`,
+  lilac `#B9AEDC`/`#5B4B93`, tan `#CDBB9A`/`#7D6844`. A call site names the hue
+  once; `onCharcoal` picks the light form, `onCanvas` picks the dark one, and
+  `onAccent` picks the type that sits *on* an accent fill. Periwinkle `#6B7FCC`
+  is the one exception — it clears 3:1 on ivory *and* 4.2:1 on charcoal, so it's
+  what graphical marks use when they can't be swapped per surface.
+- **Gold is not in the rotation.** It's the loudest colour here, and a colour
+  that loud stops meaning anything once it's also the default button, the
+  default glyph, and every third card. It's kept for the two places that should
+  shout: a warning, and a timer that's finished ringing.
+- Nothing user-facing sits below 4.5:1.
+- **Type is Avenir Next.** The geometric sans the reference asks for, but drawn
+  with a tall x-height and open apertures, so a 12pt label still reads where a
+  true geometric closes up — and six weights against Futura's two, so hierarchy
+  comes from weight rather than size alone. Clocks ask the face for its
+  monospaced figures at the descriptor, since `.monospacedDigit()` is a no-op on
+  custom fonts and proportional digits make a countdown jitter.
 
 ## Layout
 
@@ -138,7 +155,7 @@ Shared/              compiled into both the app and the widget extension
   AlarmIntents.swift       stop / pause / resume LiveActivityIntents
 
 Blur/
-  Models/     AlarmEntry (+ Weekday, AlarmSection), TimerEntry, TimerPreset
+  Models/     AlarmEntry (+ Weekday, AlarmSortOrder), TimerEntry, TimerPreset
   Services/   AlarmCenter, AlarmStore, TimerStore, StopwatchModel,
               TimerIntentParser, MinutesParser (+ PhraseHeuristics)
   Views/      RootView, Alarms/, Timers/, Stopwatch/, Components/
@@ -156,14 +173,15 @@ embeds as a dependency of the app.
 
 ## Behaviour notes
 
-**Alarms** are filed into sections automatically from how often they repeat, so
-there's nothing extra to set:
-
-| Section | Rule |
-|---|---|
-| Daily | repeats all 7 days |
-| Frequent | repeats on 2–6 days |
-| Other | one-off, or a single weekday |
+**Alarms** build a persisted usage history from distinct occasions when
+AlarmKit reports that they are actually alerting. Snooze re-alerts do not count
+twice. The counter displays through 99 and then as `99+`; after 5 rings the
+alarm appears in **Frequent**. Frequent alarms sort by usage count by default,
+with a user-selectable chronological sort. Enabled alarms below the threshold
+stay visible in **Scheduled** so they can still be edited or turned off, while
+inactive alarms below 5 rings remain remembered but hidden. Creating an alarm
+at an already remembered clock time revives that record and preserves its
+counter.
 
 **Timers** have no history and no recents — nothing about a timer is written to
 disk, and it's gone the moment it's stopped. Quick presets are 1–5, 10, 15, 20,
