@@ -3,6 +3,18 @@ import UIKit
 
 struct AlarmEditorView: View {
 
+    private enum TimeField: Hashable {
+        case hour
+        case minute
+    }
+
+    private enum Meridiem: String, CaseIterable, Identifiable {
+        case am = "AM"
+        case pm = "PM"
+
+        var id: String { rawValue }
+    }
+
     enum Mode {
         case create
         case edit(AlarmEntry)
@@ -19,8 +31,13 @@ struct AlarmEditorView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var draft: AlarmEntry
-    @State private var time: Date
+    @State private var hourText: String
+    @State private var minuteText: String
+    @State private var meridiem: Meridiem
     @State private var showDeleteConfirm = false
+    @State private var preparedHourField = false
+    @State private var preparedMinuteField = false
+    @FocusState private var focusedTimeField: TimeField?
 
     init(mode: Mode) {
         self.mode = mode
@@ -32,11 +49,12 @@ struct AlarmEditorView: View {
             entry = existing
         }
         _draft = State(initialValue: entry)
-
-        var components = DateComponents()
-        components.hour = entry.hour
-        components.minute = entry.minute
-        _time = State(initialValue: Calendar.current.date(from: components) ?? Date())
+        let displayHour = Self.uses24HourClock
+            ? entry.hour
+            : (entry.hour % 12 == 0 ? 12 : entry.hour % 12)
+        _hourText = State(initialValue: String(format: "%02d", displayHour))
+        _minuteText = State(initialValue: String(format: "%02d", entry.minute))
+        _meridiem = State(initialValue: entry.hour < 12 ? .am : .pm)
     }
 
     /// The editor is a light sheet throughout — it's the densest screen in the
@@ -89,6 +107,17 @@ struct AlarmEditorView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }
                         .font(.blurRounded(16, weight: .bold))
+                        .disabled(resolvedHour == nil || resolvedMinute == nil)
+                }
+                if focusedTimeField != nil {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        if focusedTimeField == .hour {
+                            Button("Next") { focusedTimeField = .minute }
+                        }
+                        Spacer()
+                        Button("Done") { focusedTimeField = nil }
+                            .fontWeight(.semibold)
+                    }
                 }
             }
             .confirmationDialog("Delete this alarm?",
@@ -102,15 +131,79 @@ struct AlarmEditorView: View {
             }
         }
         .presentationDetents([.large])
+        .onAppear {
+            guard !mode.isEditing else { return }
+            Task { @MainActor in
+                await Task.yield()
+                focusedTimeField = .hour
+            }
+        }
+        .onChange(of: focusedTimeField) { _, field in
+            prepareForTyping(field)
+        }
     }
 
     // MARK: Sections
 
     private var timePicker: some View {
-        VStack(spacing: 8) {
-            DatePicker("", selection: $time, displayedComponents: .hourAndMinute)
-                .datePickerStyle(.wheel)
-                .labelsHidden()
+        VStack(spacing: 14) {
+            HStack(alignment: .center, spacing: 10) {
+                timeField(
+                    text: $hourText,
+                    placeholder: Self.uses24HourClock ? "07" : "7",
+                    label: "HOUR",
+                    field: .hour,
+                    isValid: resolvedHour != nil
+                )
+
+                Text(":")
+                    .font(.blurDigits(46, weight: .bold))
+                    .foregroundStyle(Blur.inkSoft)
+                    .padding(.bottom, 18)
+
+                timeField(
+                    text: $minuteText,
+                    placeholder: "00",
+                    label: "MIN",
+                    field: .minute,
+                    isValid: resolvedMinute != nil
+                )
+
+                if !Self.uses24HourClock {
+                    VStack(spacing: 7) {
+                        ForEach(Meridiem.allCases) { period in
+                            Button {
+                                meridiem = period
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            } label: {
+                                Text(period.rawValue)
+                                    .font(.blurRounded(13, weight: .bold))
+                                    .foregroundStyle(
+                                        meridiem == period
+                                            ? Blur.onAccent(accent)
+                                            : Blur.inkSoft
+                                    )
+                                    .frame(width: 50, height: 38)
+                                    .background(
+                                        Capsule().fill(
+                                            meridiem == period
+                                                ? AnyShapeStyle(accent)
+                                                : AnyShapeStyle(Blur.canvas.opacity(0.6))
+                                        )
+                                    )
+                                    .overlay(
+                                        Capsule().strokeBorder(
+                                            meridiem == period ? Color.clear : Blur.hairline,
+                                            lineWidth: 1
+                                        )
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.bottom, 18)
+                }
+            }
 
             Text(nextFireHint)
                 .font(.blurRounded(13, weight: .semibold))
@@ -120,9 +213,48 @@ struct AlarmEditorView: View {
                 .background(Capsule().fill(Blur.onCanvas(accent).opacity(0.10)))
         }
         .frame(maxWidth: .infinity)
-        // No stipple here: the wheel picker draws its own selection band, and a
-        // texture running under it makes the digits fizz.
-        .blurCard(.light, padding: 12, stipple: false)
+        .blurCard(.light, padding: 16, stipple: false)
+    }
+
+    private func timeField(
+        text: Binding<String>,
+        placeholder: String,
+        label: String,
+        field: TimeField,
+        isValid: Bool
+    ) -> some View {
+        VStack(spacing: 6) {
+            TextField(placeholder, text: text)
+                .keyboardType(.numberPad)
+                .multilineTextAlignment(.center)
+                .font(.blurDigits(42, weight: .bold))
+                .foregroundStyle(Blur.ink)
+                .tint(accent)
+                .frame(width: 88, height: 64)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Blur.canvas.opacity(0.65))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(
+                            focusedTimeField == field
+                                ? accent
+                                : (text.wrappedValue.isEmpty || isValid ? Blur.hairline : Blur.clay),
+                            lineWidth: focusedTimeField == field ? 2 : 1
+                        )
+                )
+                .focused($focusedTimeField, equals: field)
+                .accessibilityLabel(label == "MIN" ? "Minute" : "Hour")
+                .onChange(of: text.wrappedValue) { _, value in
+                    updateTimeText(value, field: field)
+                }
+
+            Text(label)
+                .font(.blurRounded(10, weight: .bold))
+                .tracking(1.2)
+                .foregroundStyle(Blur.inkFaint)
+        }
     }
 
     private var daysPicker: some View {
@@ -262,19 +394,44 @@ struct AlarmEditorView: View {
 
     // MARK: Helpers
 
+    private static var uses24HourClock: Bool {
+        let format = DateFormatter.dateFormat(fromTemplate: "j", options: 0, locale: .current)
+            ?? "h a"
+        return !format.contains("a")
+    }
+
+    private var resolvedHour: Int? {
+        guard let value = Int(hourText) else { return nil }
+        if Self.uses24HourClock {
+            return (0...23).contains(value) ? value : nil
+        }
+        guard (1...12).contains(value) else { return nil }
+        switch meridiem {
+        case .am: return value == 12 ? 0 : value
+        case .pm: return value == 12 ? 12 : value + 12
+        }
+    }
+
+    private var resolvedMinute: Int? {
+        guard let value = Int(minuteText), (0...59).contains(value) else { return nil }
+        return value
+    }
+
     private var nextFireHint: String {
+        guard let hour = resolvedHour, let minute = resolvedMinute else {
+            return "Enter a valid time"
+        }
         var preview = draft
-        let components = Calendar.current.dateComponents([.hour, .minute], from: time)
-        preview.hour = components.hour ?? 0
-        preview.minute = components.minute ?? 0
+        preview.hour = hour
+        preview.minute = minute
         guard let next = preview.nextFireDate() else { return "Won't repeat" }
         return "Rings \(next.formatted(.relative(presentation: .named, unitsStyle: .wide)))"
     }
 
     private func save() {
-        let components = Calendar.current.dateComponents([.hour, .minute], from: time)
-        draft.hour = components.hour ?? 0
-        draft.minute = components.minute ?? 0
+        guard let hour = resolvedHour, let minute = resolvedMinute else { return }
+        draft.hour = hour
+        draft.minute = minute
         // Saving an alarm always arms it — an edit you deliberately made should
         // not stay switched off.
         draft.isEnabled = true
@@ -288,5 +445,42 @@ struct AlarmEditorView: View {
             }
         }
         dismiss()
+    }
+
+    private func prepareForTyping(_ field: TimeField?) {
+        switch field {
+        case .hour where !preparedHourField:
+            preparedHourField = true
+            hourText = ""
+        case .minute where !preparedMinuteField:
+            preparedMinuteField = true
+            minuteText = ""
+        default:
+            break
+        }
+    }
+
+    private func updateTimeText(_ value: String, field: TimeField) {
+        let cleaned = String(value.filter(\.isNumber).prefix(2))
+        if cleaned != value {
+            switch field {
+            case .hour: hourText = cleaned
+            case .minute: minuteText = cleaned
+            }
+            return
+        }
+
+        guard cleaned.count == 2 else { return }
+        switch field {
+        case .hour where resolvedHour != nil:
+            // A new alarm is entered as one fast HHMM run. While editing,
+            // finishing the hour keeps the existing minutes intact; tapping
+            // the minute field explicitly clears it for replacement.
+            focusedTimeField = mode.isEditing ? nil : .minute
+        case .minute where resolvedMinute != nil:
+            focusedTimeField = nil
+        default:
+            break
+        }
     }
 }

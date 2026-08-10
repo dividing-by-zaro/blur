@@ -1,6 +1,8 @@
-# Local signing config — bundle ID prefix and Apple Developer Team ID.
-# Never commit this: project.yml is public, so anything identifying lives here.
-# Copy Config/Local.example.xcconfig to create it.
+# Local signing secrets — never commit Apple Developer account identifiers.
+# Copy Config/Secrets.example.xcconfig to Config/Secrets.xcconfig to create it.
+Config/Secrets.xcconfig
+
+# Legacy local config. Keep ignored so older clones cannot accidentally publish it.
 Config/Local.xcconfig
 
 # XcodeGen output — regenerate with `xcodegen generate`

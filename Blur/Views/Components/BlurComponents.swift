@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import AVFAudio
 
 // MARK: - Backdrop
 
@@ -268,44 +269,119 @@ struct TonePickerRow: View {
     var accent: Color = Blur.blue
     var surface: BlurSurface = .light
 
+    @State private var previewPlayer: AVAudioPlayer?
+    @State private var previewingTone: AlarmTone?
+    @State private var previewToken = UUID()
+
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(AlarmTone.allCases) { tone in
-                    let isSelected = tone == selection
-                    Button {
-                        selection = tone
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: tone.symbolName)
-                                .font(.system(size: 12, weight: .bold))
-                            Text(tone.displayName)
-                                .font(.blurRounded(14, weight: .semibold))
+        VStack(alignment: .leading, spacing: 7) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(AlarmTone.allCases) { tone in
+                        let isSelected = tone == selection
+                        Button {
+                            selection = tone
+                            preview(tone)
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: previewingTone == tone
+                                      ? "speaker.wave.2.fill"
+                                      : tone.symbolName)
+                                    .font(.system(size: 12, weight: .bold))
+                                Text(tone.displayName)
+                                    .font(.blurRounded(14, weight: .semibold))
+                            }
+                            .foregroundStyle(isSelected ? Blur.onAccent(accent) : surface.inkSoft)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .background(
+                                Capsule().fill(
+                                    isSelected
+                                    ? AnyShapeStyle(accent)
+                                    : AnyShapeStyle(surface.well)
+                                )
+                            )
+                            .overlay(
+                                Capsule().strokeBorder(
+                                    isSelected ? Color.clear : surface.line,
+                                    lineWidth: 1
+                                )
+                            )
                         }
-                        .foregroundStyle(isSelected ? Blur.onAccent(accent) : surface.inkSoft)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 9)
-                        .background(
-                            Capsule().fill(
-                                isSelected
-                                ? AnyShapeStyle(accent)
-                                : AnyShapeStyle(surface.well)
-                            )
-                        )
-                        .overlay(
-                            Capsule().strokeBorder(
-                                isSelected ? Color.clear : surface.line,
-                                lineWidth: 1
-                            )
-                        )
+                        .buttonStyle(.plain)
+                        .accessibilityHint(tone.isPreviewable
+                                           ? "Selects and previews this tone"
+                                           : "Selects this tone")
                     }
-                    .buttonStyle(.plain)
                 }
+                .padding(.horizontal, 2)
+                .padding(.vertical, 2)
             }
-            .padding(.horizontal, 2)
-            .padding(.vertical, 2)
+
+            Label(previewMessage, systemImage: previewingTone == nil
+                  ? "speaker.wave.2"
+                  : "waveform")
+                .font(.blurRounded(11, weight: .medium))
+                .foregroundStyle(surface.inkFaint)
         }
+        .onDisappear { stopPreview() }
+    }
+
+    private var previewMessage: String {
+        if let previewingTone { return "Playing \(previewingTone.displayName)" }
+        switch selection {
+        case .system: return "Default uses the system alarm sound"
+        case .silent: return "No Tone is silent"
+        default:      return "Tap a tone to preview"
+        }
+    }
+
+    private func preview(_ tone: AlarmTone) {
+        stopPreview()
+        guard tone.isPreviewable,
+              let fileName = tone.fileName else { return }
+
+        let path = fileName as NSString
+        guard let url = Bundle.main.url(
+            forResource: path.deletingPathExtension,
+            withExtension: path.pathExtension
+        ) else { return }
+
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+            try session.setActive(true)
+
+            let player = try AVAudioPlayer(contentsOf: url)
+            player.volume = 1
+            player.prepareToPlay()
+            player.play()
+
+            let token = UUID()
+            previewToken = token
+            previewPlayer = player
+            previewingTone = tone
+
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                guard previewToken == token else { return }
+                stopPreview()
+            }
+        } catch {
+            stopPreview()
+        }
+    }
+
+    private func stopPreview() {
+        previewToken = UUID()
+        previewPlayer?.stop()
+        previewPlayer = nil
+        previewingTone = nil
+        try? AVAudioSession.sharedInstance().setActive(
+            false,
+            options: .notifyOthersOnDeactivation
+        )
     }
 }
 

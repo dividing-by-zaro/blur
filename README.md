@@ -23,17 +23,17 @@ parsed on-device, with no network and no microphone permission.
 
 The Xcode project is generated, not committed. [XcodeGen](https://github.com/yonaskolb/XcodeGen) builds it from `project.yml`.
 
-First, create your local signing config — generation fails without it, on purpose:
+First, create your local signing-secrets file — generation fails without it, on
+purpose:
 
 ```bash
-cp Config/Local.example.xcconfig Config/Local.xcconfig
+cp Config/Secrets.example.xcconfig Config/Secrets.xcconfig
 ```
 
-Set `BUNDLE_ID_PREFIX` in that file to a reverse-DNS prefix you control; the
-targets append their own suffix, giving `<prefix>.blur` and
-`<prefix>.blur.widget`. `Config/Local.xcconfig` is gitignored, which is the
-point: it holds the values that identify your Apple developer account, so they
-never reach a public `project.yml`. Then:
+Set `DEVELOPMENT_TEAM` in that file if Xcode cannot choose your signed-in team
+automatically. `Config/Secrets.xcconfig` is gitignored so the account identifier
+never reaches the public repository. The bundle identifiers are fixed to
+`com.izaro.blur` for the app and `com.izaro.blur.widget` for the widget. Then:
 
 ```bash
 xcodegen generate && open Blur.xcodeproj
@@ -68,46 +68,17 @@ There is **no App Group**. Everything the lock-screen UI needs travels inside
 `AlarmAttributes.metadata`, and `LiveActivityIntent` runs in the app's own
 process, so no shared container is required — which keeps signing simple.
 
-## Timers you write instead of dial
+## Fast keypad entry
 
-The custom timer field is one line of free text. No wheel, no stepper, no
-dropdown, and no microphone permission: it uses a plain keyboard rather than a
-number pad specifically so the system dictation key is in reach. Voice input is
-entirely the platform's, and the app never opens an audio session.
+Alarm creation uses a large `HH : MM` number-pad entry instead of a wheel. It
+follows the device's clock preference, adding AM/PM controls only for 12-hour
+locales. Timer creation uses the same visual treatment with direct
+`HH : MM : SS` entry. Two valid digits advance to the next field, and the
+keyboard toolbar also provides Next and Done controls.
 
-`TimerIntentParser` reads duration, label and tone out of that line in a single
-guided-generation call against Apple's on-device model (`FoundationModels`):
-
-```swift
-@Generable
-struct TimerRequest {
-    @Guide(description: "Total duration in minutes.", .range(0...1440))
-    var minutes: Int
-    @Guide(description: "Two or three words for what the timer is for.")
-    var label: String
-    @Guide(description: "The tone the person named.")
-    var tone: ToneChoice
-}
-```
-
-Guided generation constrains decoding to that shape, so the tone is always a
-case that exists and the minutes always parse. There is no free-text response to
-interpret and nothing to regex afterwards.
-
-**The model is never a hard dependency.** It's absent on ineligible hardware,
-with Apple Intelligence switched off, and while assets are still downloading —
-and it can refuse or fail mid-call. Every one of those paths falls through to
-two model-free tiers:
-
-| Tier | Handles | Runs when |
-|---|---|---|
-| `FoundationModels` | duration, label, tone, read as intent | available and the phrase isn't a bare duration |
-| `PhraseHeuristics` | label and tone by stripping duration words and filler | model unavailable, failed, or returned nothing |
-| `MinutesParser` | "25", "twenty five minutes", "an hour and a half" | always — it's the floor everything stands on |
-
-A bare duration skips the model entirely, so the ordinary case stays instant.
-The line under the field always says which tier answered, because a feature that
-quietly does less than it claims is worse than one that says so.
+Tone chips are audible previews as well as selectors. Bundled tones play a
+three-second sample on tap; Default continues to represent AlarmKit's system
+sound, and No Tone remains silent.
 
 ## Design
 
@@ -156,14 +127,13 @@ Shared/              compiled into both the app and the widget extension
 
 Blur/
   Models/     AlarmEntry (+ Weekday, AlarmSortOrder), TimerEntry, TimerPreset
-  Services/   AlarmCenter, AlarmStore, TimerStore, StopwatchModel,
-              TimerIntentParser, MinutesParser (+ PhraseHeuristics)
+  Services/   AlarmCenter, AlarmStore, TimerStore, StopwatchModel
   Views/      RootView, Alarms/, Timers/, Stopwatch/, Components/
   Resources/  Sounds/*.caf, Assets.xcassets
 
 BlurWidget/          Live Activity + Dynamic Island presentation
 Tools/               tone generator
-Config/              Local.example.xcconfig (copy to Local.xcconfig, gitignored)
+Config/              Secrets.example.xcconfig (copy to Secrets.xcconfig, gitignored)
 blur-icon.png        1024² master for the app icon
 ```
 
@@ -184,8 +154,9 @@ at an already remembered clock time revives that record and preserves its
 counter.
 
 **Timers** have no history and no recents — nothing about a timer is written to
-disk, and it's gone the moment it's stopped. Quick presets are 1–5, 10, 15, 20,
-25, 30 min, 1 hr, 90 min, 2 hr.
+disk, and it's gone the moment it's stopped. Custom durations use direct
+hours/minutes/seconds keypad entry. Quick presets are 1–5, 10, 15, 20, 25, 30
+min, 1 hr, 90 min, 2 hr.
 
 **Stopwatch** is start / stop / reset only, no laps. Elapsed time is derived from
 wall-clock dates rather than accumulated ticks, so it stays exact across

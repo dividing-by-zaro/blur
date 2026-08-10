@@ -3,12 +3,19 @@ import UIKit
 
 struct TimersView: View {
 
+    private enum DurationField: Hashable {
+        case hours
+        case minutes
+        case seconds
+    }
+
     @Environment(TimerStore.self) private var store
     @Environment(AlarmCenter.self) private var center
 
-    @State private var parser = TimerIntentParser()
-    @State private var customText: String = ""
-    @FocusState private var customFieldFocused: Bool
+    @State private var hoursText = ""
+    @State private var minutesText = ""
+    @State private var secondsText = ""
+    @FocusState private var focusedDurationField: DurationField?
 
     private let columnCount = 5
     private var columns: [GridItem] {
@@ -59,10 +66,22 @@ struct TimersView: View {
         .onChange(of: center.liveAlarms.mapValues(\.state)) { _, _ in
             store.syncPauseStates()
         }
+        .toolbar {
+            if focusedDurationField != nil {
+                ToolbarItemGroup(placement: .keyboard) {
+                    if focusedDurationField != .seconds {
+                        Button("Next") { focusNextDurationField() }
+                    }
+                    Spacer()
+                    Button("Done") { focusedDurationField = nil }
+                        .fontWeight(.semibold)
+                }
+            }
+        }
     }
 
     private var subtitle: String? {
-        store.running.isEmpty ? "Tap a preset or type your own" : nil
+        store.running.isEmpty ? "Tap a preset or enter a duration" : nil
     }
 
     // MARK: Quick timers
@@ -120,120 +139,169 @@ struct TimersView: View {
 
     // MARK: Custom
 
-    /// One free-text line. A plain keyboard rather than a number pad, which is
-    /// what puts the system dictation key within reach — so "twenty five minutes
-    /// for the pasta, chime" is spoken the same way it's typed, and the app
-    /// never has to hold a microphone permission of its own.
     private var customTimer: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SectionHeader(title: "Custom", accent: Blur.charcoal)
+            SectionHeader(title: "Custom Duration", accent: Blur.charcoal)
 
             VStack(alignment: .leading, spacing: 14) {
-                TextField(fieldPrompt, text: $customText, axis: .vertical)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .lineLimit(1...3)
-                    .submitLabel(.done)
-                    .font(.blurRounded(21, weight: .semibold))
-                    .foregroundStyle(Blur.ink)
-                    .tint(Blur.blue)
-                    .focused($customFieldFocused)
-                    .accessibilityLabel("Timer description")
-                    .onChange(of: customFieldFocused) { _, focused in
-                        // Warm the model while they're still typing, so the
-                        // first parse isn't paying for the load.
-                        if focused { parser.prewarm() }
-                    }
-                    .onSubmit { startCustom() }
+                HStack(alignment: .center, spacing: 8) {
+                    durationField(
+                        text: $hoursText,
+                        label: "HR",
+                        field: .hours,
+                        maximum: 23
+                    )
 
-                readout
+                    durationColon
 
-                Button(parser.isThinking ? "Reading…" : "Start Timer") { startCustom() }
+                    durationField(
+                        text: $minutesText,
+                        label: "MIN",
+                        field: .minutes,
+                        maximum: 59
+                    )
+
+                    durationColon
+
+                    durationField(
+                        text: $secondsText,
+                        label: "SEC",
+                        field: .seconds,
+                        maximum: 59
+                    )
+                }
+
+                if let durationSeconds {
+                    Label(
+                        "Starts a \(TimerEntry.describe(seconds: durationSeconds)) timer",
+                        systemImage: "timer"
+                    )
+                    .font(.blurRounded(13, weight: .semibold))
+                    .foregroundStyle(Blur.inkSoft)
+                } else {
+                    Text("Tap a field and enter the duration with the number pad")
+                        .font(.blurRounded(13, weight: .medium))
+                        .foregroundStyle(Blur.inkFaint)
+                }
+
+                Button("Start Timer") { startCustom() }
                     .buttonStyle(BlurPrimaryButtonStyle())
-                    .disabled(!canStart)
+                    .disabled(durationSeconds == nil)
             }
             .blurCard(.light)
         }
     }
 
-    /// Rotates through examples so the field teaches what it now accepts.
-    private var fieldPrompt: String {
-        parser.isModelAvailable
-            ? "25 min for the pasta, chime"
-            : "25 minutes"
+    private var durationColon: some View {
+        Text(":")
+            .font(.blurDigits(34, weight: .bold))
+            .foregroundStyle(Blur.inkSoft)
+            .padding(.bottom, 18)
     }
 
-    /// Below the field: what will happen, and which parser will do it.
-    @ViewBuilder
-    private var readout: some View {
-        if let minutes = quickMinutes, minutes > 0 {
-            let preview = PhraseHeuristics.labelAndTone(from: customText)
-            Text(previewLine(minutes: minutes, label: preview.label, tone: preview.tone))
-                .font(.blurRounded(13, weight: .semibold))
-                .foregroundStyle(Blur.inkSoft)
-        } else if !customText.isEmpty, parser.isModelAvailable {
-            // No bare number in there, but the model may still find one.
-            Text("Reads the label and tone from what you wrote")
-                .font(.blurRounded(13, weight: .medium))
+    private func durationField(
+        text: Binding<String>,
+        label: String,
+        field: DurationField,
+        maximum: Int
+    ) -> some View {
+        let isValid = text.wrappedValue.isEmpty
+            || (Int(text.wrappedValue).map { (0...maximum).contains($0) } ?? false)
+
+        return VStack(spacing: 6) {
+            TextField("00", text: text)
+                .keyboardType(.numberPad)
+                .multilineTextAlignment(.center)
+                .font(.blurDigits(34, weight: .bold))
+                .foregroundStyle(Blur.ink)
+                .tint(Blur.blue)
+                .frame(maxWidth: .infinity)
+                .frame(height: 62)
+                .background(
+                    RoundedRectangle(cornerRadius: 17, style: .continuous)
+                        .fill(Blur.canvas.opacity(0.65))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 17, style: .continuous)
+                        .strokeBorder(
+                            focusedDurationField == field
+                                ? Blur.blue
+                                : (isValid ? Blur.hairline : Blur.clay),
+                            lineWidth: focusedDurationField == field ? 2 : 1
+                        )
+                )
+                .focused($focusedDurationField, equals: field)
+                .accessibilityLabel(label == "HR" ? "Hours" : (label == "MIN" ? "Minutes" : "Seconds"))
+                .onChange(of: text.wrappedValue) { _, value in
+                    updateDurationText(value, field: field, maximum: maximum)
+                }
+
+            Text(label)
+                .font(.blurRounded(10, weight: .bold))
+                .tracking(1.2)
                 .foregroundStyle(Blur.inkFaint)
         }
-
-        // Shown whenever the model is missing, not only once there's text —
-        // otherwise the feature just quietly does less than it claims.
-        if let reason = parser.unavailableReason {
-            Text(reason)
-                .font(.blurRounded(12, weight: .medium))
-                .foregroundStyle(Blur.inkFaint)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    /// "Starts a 30 min timer · Pasta · Chime" — the label and tone shown here
-    /// are the heuristics' guess, which is the floor. With the model available
-    /// the actual result is usually better, never worse.
-    private func previewLine(minutes: Int, label: String, tone: AlarmTone?) -> String {
-        var parts = ["Starts a \(TimerEntry.describe(seconds: Double(minutes) * 60)) timer"]
-        if !label.isEmpty { parts.append(label) }
-        if let tone { parts.append(tone.displayName) }
-        return parts.joined(separator: " · ")
     }
 
     // MARK: Actions
 
-    /// Duration visible without waking the model — drives the live readout and
-    /// keeps the button enabled for the ordinary "25" case with no latency.
-    private var quickMinutes: Int? {
-        MinutesParser.minutes(from: customText).map { min($0, 24 * 60) }
-    }
-
-    /// Anything at all typed is startable when the model is there, since it may
-    /// find a duration `MinutesParser` can't. Without it, a duration is required.
-    private var canStart: Bool {
-        guard !parser.isThinking else { return false }
-        let hasText = !customText.trimmingCharacters(in: .whitespaces).isEmpty
-        return parser.isModelAvailable ? hasText : quickMinutes != nil
+    private var durationSeconds: TimeInterval? {
+        let hours = Int(hoursText) ?? 0
+        let minutes = Int(minutesText) ?? 0
+        let seconds = Int(secondsText) ?? 0
+        guard (0...23).contains(hours),
+              (0...59).contains(minutes),
+              (0...59).contains(seconds) else { return nil }
+        let total = hours * 3600 + minutes * 60 + seconds
+        return total > 0 ? TimeInterval(total) : nil
     }
 
     private func startCustom() {
-        guard canStart else { return }
-        customFieldFocused = false
+        guard let durationSeconds else { return }
+        focusedDurationField = nil
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
 
         Task {
-            guard let parsed = await parser.parse(customText), parsed.minutes > 0 else { return }
-
-            // `nil` label and tone fall through to whatever the field and the
-            // picker hold, so what the model didn't find, the user's own
-            // choices still supply.
-            let ok = await store.start(
-                seconds: Double(parsed.minutes) * 60,
-                label: parsed.label.isEmpty ? nil : parsed.label,
-                tone: parsed.tone
-            )
+            let ok = await store.start(seconds: durationSeconds)
             if ok {
-                customText = ""
-                parser.reset()
+                hoursText = ""
+                minutesText = ""
+                secondsText = ""
             }
+        }
+    }
+
+    private func updateDurationText(
+        _ value: String,
+        field: DurationField,
+        maximum: Int
+    ) {
+        let cleaned = String(value.filter(\.isNumber).prefix(2))
+        if cleaned != value {
+            setDurationText(cleaned, for: field)
+            return
+        }
+
+        if cleaned.count == 2,
+           let number = Int(cleaned),
+           (0...maximum).contains(number) {
+            focusNextDurationField()
+        }
+    }
+
+    private func setDurationText(_ value: String, for field: DurationField) {
+        switch field {
+        case .hours: hoursText = value
+        case .minutes: minutesText = value
+        case .seconds: secondsText = value
+        }
+    }
+
+    private func focusNextDurationField() {
+        switch focusedDurationField {
+        case .hours: focusedDurationField = .minutes
+        case .minutes: focusedDurationField = .seconds
+        case .seconds, nil: focusedDurationField = nil
         }
     }
 

@@ -55,18 +55,22 @@ struct TimerEntry: Identifiable, Hashable, Sendable {
         return trimmed.isEmpty ? durationText : trimmed
     }
 
-    /// Human phrasing of the total length: "25 min", "1 hr", "1 hr 30 min".
+    /// Human phrasing of the total length: "25 min", "1 min 30 sec", "1 hr".
     var durationText: String { Self.describe(seconds: duration) }
 
     static func describe(seconds: TimeInterval) -> String {
         let total = Int(seconds.rounded())
         let hours = total / 3600
         let minutes = (total % 3600) / 60
-        switch (hours, minutes) {
-        case (0, let m):          return "\(m) min"
-        case (let h, 0):          return h == 1 ? "1 hr" : "\(h) hr"
-        case (let h, let m):      return "\(h) hr \(m) min"
+        let remainingSeconds = total % 60
+
+        var parts: [String] = []
+        if hours > 0 { parts.append("\(hours) hr") }
+        if minutes > 0 { parts.append("\(minutes) min") }
+        if remainingSeconds > 0 || parts.isEmpty {
+            parts.append("\(remainingSeconds) sec")
         }
+        return parts.joined(separator: " ")
     }
 }
 
