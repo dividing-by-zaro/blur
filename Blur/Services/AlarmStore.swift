@@ -189,16 +189,10 @@ final class AlarmStore {
             }
         }
 
-        // Drop AlarmKit alarms with no matching entry — leftovers from a delete
-        // that didn't complete, or from a previous install.
-        let knownIDs = Set(alarms.map(\.id))
-        for id in center.liveAlarms.keys where !knownIDs.contains(id) {
-            // Timers live in AlarmKit too and are not in `alarms`; only remove
-            // ids the timer store isn't tracking.
-            if !TimerStore.activeTimerIDs.contains(id) {
-                center.cancel(id: id)
-            }
-        }
+        // Leave every unowned AlarmKit record alone. Alarms and timers share the
+        // same manager, and the timer store is intentionally memory-only, so a
+        // valid timer can outlive the in-app record that originally created it.
+        // Explicit alarm updates and deletes already cancel ids this store owns.
 
         unreliableIDs = stillUnreliable
         save()

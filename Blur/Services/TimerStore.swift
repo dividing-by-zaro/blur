@@ -15,11 +15,6 @@ final class TimerStore {
     /// Timers the app has started and that haven't finished yet.
     private(set) var running: [TimerEntry] = []
 
-    /// Ids the alarm store must not garbage-collect during reconciliation.
-    /// Static because reconciliation runs on the alarm store, which has no
-    /// reference to this one.
-    nonisolated(unsafe) static var activeTimerIDs: Set<UUID> = []
-
     /// Tone and label carried over between quick-timer taps, so setting a tone
     /// once and then tapping 5 / 10 / 15 does what you'd expect.
     var selectedTone: AlarmTone = .system
@@ -50,7 +45,6 @@ final class TimerStore {
         guard ok else { return false }
 
         running.append(entry)
-        Self.activeTimerIDs.insert(entry.id)
 
         // The label is a one-shot: it applies to the timer just started and then
         // clears, so the next quick tap isn't mislabelled.
@@ -103,12 +97,10 @@ final class TimerStore {
     func cancelAll() {
         for entry in running { center.cancel(id: entry.id) }
         running.removeAll()
-        Self.activeTimerIDs.removeAll()
     }
 
     private func remove(_ id: UUID) {
         running.removeAll { $0.id == id }
-        Self.activeTimerIDs.remove(id)
     }
 
     // MARK: - State bridging
@@ -131,12 +123,10 @@ final class TimerStore {
         // Drop timers AlarmKit no longer has — they fired and were dismissed.
         running.removeAll { entry in
             guard center.alarm(for: entry.id) == nil else { return false }
-            Self.activeTimerIDs.remove(entry.id)
             return true
         }
 
         syncPauseStates()
-        Self.activeTimerIDs = Set(running.map(\.id))
     }
 
     /// Reconciles local pause bookkeeping with AlarmKit's view of the world.

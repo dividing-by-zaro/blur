@@ -58,7 +58,9 @@ struct StopAlarmIntent: LiveActivityIntent {
     func perform() async throws -> some IntentResult {
         if let id = UUID(uuidString: alarmID) {
             AlarmFireObservation.record(id: id)
-            try? AlarmManager.shared.stop(id: id)
+            // AlarmKit has already performed the stop-button transition before
+            // this intent runs. Calling `stop` again would target the next
+            // occurrence of a repeating alarm and remove its recurring schedule.
         }
         return .result()
     }
