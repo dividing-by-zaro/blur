@@ -62,9 +62,9 @@ struct TimersView: View {
             customTimer
         }
         // `Alarm` isn't Equatable, so watch the states — which is the only part
-        // that matters here anyway (pause/resume driven from the Live Activity).
+        // that matters here anyway (including a stopped timer disappearing).
         .onChange(of: center.liveAlarms.mapValues(\.state)) { _, _ in
-            store.syncPauseStates()
+            store.reconcile()
         }
         .toolbar {
             if focusedDurationField != nil {

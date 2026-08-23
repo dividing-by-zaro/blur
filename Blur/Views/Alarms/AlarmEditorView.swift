@@ -124,8 +124,11 @@ struct AlarmEditorView: View {
                                 isPresented: $showDeleteConfirm,
                                 titleVisibility: .visible) {
                 Button("Delete", role: .destructive) {
-                    store.delete(draft)
-                    dismiss()
+                    Task {
+                        if await store.delete(draft) {
+                            dismiss()
+                        }
+                    }
                 }
                 Button("Keep", role: .cancel) {}
             }

@@ -90,9 +90,16 @@ final class AlarmCenter {
     }
 
     /// Synchronous read, used at launch before the stream has produced anything.
-    func refreshLiveAlarms() {
-        guard let alarms = try? AlarmManager.shared.alarms else { return }
-        replaceLiveAlarms(with: alarms)
+    @discardableResult
+    func refreshLiveAlarms() -> Bool {
+        do {
+            let alarms = try AlarmManager.shared.alarms
+            replaceLiveAlarms(with: alarms)
+            return true
+        } catch {
+            lastError = .lifecycleFailed(action: "refresh", detail: error.localizedDescription)
+            return false
+        }
     }
 
     /// Installs the single alarm-store listener and immediately reports alarms
@@ -137,7 +144,7 @@ final class AlarmCenter {
             return false
         }
 
-        let accentIndex = abs(entry.id.hashValue) % 3
+        let accentIndex = Int(entry.id.hashValue.magnitude % 3)
         let metadata = BlurAlarmMetadata(
             kind: .alarm,
             label: entry.displayLabel,
@@ -175,7 +182,7 @@ final class AlarmCenter {
                 : nil,
             schedule: entry.schedule,
             attributes: attributes,
-            stopIntent: StopAlarmIntent(alarmID: entry.id),
+            stopIntent: AlarmStopObservedIntent(alarmID: entry.id),
             secondaryIntent: nil,
             sound: entry.tone.alertSound
         )
@@ -231,7 +238,7 @@ final class AlarmCenter {
                                                        postAlert: nil),
             schedule: nil,
             attributes: attributes,
-            stopIntent: StopAlarmIntent(alarmID: entry.id),
+            stopIntent: AlarmStopObservedIntent(alarmID: entry.id),
             secondaryIntent: nil,
             sound: entry.tone.alertSound
         )
@@ -251,7 +258,6 @@ final class AlarmCenter {
                 let wasInserted = currentlyAlertingIDs.insert(alarm.id).inserted
                 if wasInserted { alarmAlertHandler?([alarm.id], Date()) }
             }
-            lastError = nil
             return true
         } catch AlarmManager.AlarmError.maximumLimitReached {
             lastError = .limitReached
@@ -264,23 +270,64 @@ final class AlarmCenter {
 
     // MARK: - Lifecycle commands
 
-    /// Removes an alarm entirely. Safe to call for ids AlarmKit doesn't know.
-    func cancel(id: UUID) {
-        try? AlarmManager.shared.cancel(id: id)
-        liveAlarms[id] = nil
-        currentlyAlertingIDs.remove(id)
+    /// Removes an alarm entirely. A missing id already satisfies the request.
+    @discardableResult
+    func cancel(id: UUID) -> Bool {
+        do {
+            try AlarmManager.shared.cancel(id: id)
+            liveAlarms[id] = nil
+            currentlyAlertingIDs.remove(id)
+            return true
+        } catch {
+            let refreshed = refreshLiveAlarms()
+            if refreshed && liveAlarms[id] == nil {
+                currentlyAlertingIDs.remove(id)
+                return true
+            }
+            lastError = .lifecycleFailed(action: "cancel", detail: error.localizedDescription)
+            return false
+        }
     }
 
-    func stop(id: UUID) {
-        try? AlarmManager.shared.stop(id: id)
+    /// Stops the current occurrence or countdown. Repeating schedules survive.
+    @discardableResult
+    func stop(id: UUID) -> Bool {
+        do {
+            try AlarmManager.shared.stop(id: id)
+            refreshLiveAlarms()
+            return true
+        } catch {
+            let refreshed = refreshLiveAlarms()
+            if refreshed && liveAlarms[id] == nil { return true }
+            lastError = .lifecycleFailed(action: "stop", detail: error.localizedDescription)
+            return false
+        }
     }
 
-    func pause(id: UUID) {
-        try? AlarmManager.shared.pause(id: id)
+    @discardableResult
+    func pause(id: UUID) -> Bool {
+        do {
+            try AlarmManager.shared.pause(id: id)
+            refreshLiveAlarms()
+            return true
+        } catch {
+            refreshLiveAlarms()
+            lastError = .lifecycleFailed(action: "pause", detail: error.localizedDescription)
+            return false
+        }
     }
 
-    func resume(id: UUID) {
-        try? AlarmManager.shared.resume(id: id)
+    @discardableResult
+    func resume(id: UUID) -> Bool {
+        do {
+            try AlarmManager.shared.resume(id: id)
+            refreshLiveAlarms()
+            return true
+        } catch {
+            refreshLiveAlarms()
+            lastError = .lifecycleFailed(action: "resume", detail: error.localizedDescription)
+            return false
+        }
     }
 
     // MARK: - Helpers
@@ -297,6 +344,7 @@ enum AlarmCenterError: Identifiable, Equatable {
     case authorizationFailed
     case limitReached
     case scheduleFailed(String)
+    case lifecycleFailed(action: String, detail: String)
 
     var id: String { message }
 
@@ -305,6 +353,7 @@ enum AlarmCenterError: Identifiable, Equatable {
         case .notAuthorized, .authorizationFailed: return "Alarms Are Off"
         case .limitReached:                        return "Too Many Alarms"
         case .scheduleFailed:                      return "Couldn’t Schedule"
+        case .lifecycleFailed(let action, _):       return "Couldn’t \(action.capitalized)"
         }
     }
 
@@ -318,6 +367,8 @@ enum AlarmCenterError: Identifiable, Equatable {
             return "iOS limits how many alarms an app can schedule at once. Delete or turn off an alarm to make room."
         case .scheduleFailed(let detail):
             return "The alarm couldn’t be scheduled: \(detail)"
+        case .lifecycleFailed(let action, let detail):
+            return "The \(action) didn’t complete, so Blur kept the existing alarm or timer: \(detail)"
         }
     }
 }

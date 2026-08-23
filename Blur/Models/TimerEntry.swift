@@ -3,9 +3,9 @@ import Foundation
 /// A running timer.
 ///
 /// Deliberately transient: a timer exists while it is counting down and is gone
-/// the moment it is stopped or dismissed. There is no history and no "recents"
-/// list, by design — nothing here is ever written to disk.
-struct TimerEntry: Identifiable, Hashable, Sendable {
+/// the moment it is stopped or dismissed. Active records are persisted only so
+/// a system timer can be restored after relaunch; there is no timer history.
+struct TimerEntry: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     var label: String
     /// Total length in seconds.

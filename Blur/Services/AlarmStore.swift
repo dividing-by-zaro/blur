@@ -20,6 +20,8 @@ final class AlarmStore {
 
     private let center: AlarmCenter
     private let defaultsKey = "blur.alarms.v1"
+    @ObservationIgnored private var mutationIsLocked = false
+    @ObservationIgnored private var mutationWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(center: AlarmCenter = .shared) {
         self.center = center
@@ -58,33 +60,23 @@ final class AlarmStore {
     // MARK: - Mutations
 
     func add(_ entry: AlarmEntry) async {
-        // A clock time is a remembered alarm. Re-creating (for example) a 7:00
-        // one-off revives that record rather than starting its usage at zero.
-        if let index = alarms.firstIndex(where: {
-            $0.hour == entry.hour && $0.minute == entry.minute
-        }) {
-            let remembered = alarms[index]
-            var replacement = entry
-            replacement.id = remembered.id
-            replacement.createdAt = remembered.createdAt
-            replacement.fireCount = remembered.fireCount
-            replacement.lastCountedOccurrence = remembered.lastCountedOccurrence
-            replacement.armedFor = nil
-            center.cancel(id: remembered.id)
-            alarms[index] = replacement
-        } else {
-            alarms.append(entry)
-        }
+        await acquireMutationLock()
+        defer { releaseMutationLock() }
+
+        // Identity is the UUID, never the clock time. Multiple alarms at the
+        // same minute can have different repeat days, tones, and labels, and
+        // must coexist without replacing or cancelling one another.
+        alarms.append(entry)
         save()
-        guard let saved = alarms.first(where: {
-            $0.hour == entry.hour && $0.minute == entry.minute
-        }) else { return }
-        if saved.isEnabled {
-            await applySchedule(for: saved)
+        if entry.isEnabled {
+            await applySchedule(for: entry)
         }
     }
 
     func update(_ entry: AlarmEntry) async {
+        await acquireMutationLock()
+        defer { releaseMutationLock() }
+
         guard let index = alarms.firstIndex(where: { $0.id == entry.id }) else { return }
         let remembered = alarms[index]
         var replacement = entry
@@ -93,13 +85,14 @@ final class AlarmStore {
         replacement.createdAt = remembered.createdAt
         replacement.fireCount = remembered.fireCount
         replacement.lastCountedOccurrence = remembered.lastCountedOccurrence
-        alarms[index] = replacement
-        save()
-
         // Any edit re-creates the AlarmKit alarm from scratch. Cheaper to reason
         // about than diffing which fields changed, and guarantees the scheduled
-        // alarm matches the entry exactly.
-        center.cancel(id: entry.id)
+        // alarm matches the entry exactly. Keep the old record if cancellation
+        // fails, because it still describes the alarm that can ring.
+        guard center.cancel(id: entry.id) else { return }
+
+        alarms[index] = replacement
+        save()
         if replacement.isEnabled {
             await applySchedule(for: replacement)
         } else {
@@ -107,32 +100,51 @@ final class AlarmStore {
         }
     }
 
-    func delete(_ entry: AlarmEntry) {
+    @discardableResult
+    func delete(_ entry: AlarmEntry) async -> Bool {
+        await acquireMutationLock()
+        defer { releaseMutationLock() }
+
+        guard center.cancel(id: entry.id) else { return false }
         alarms.removeAll { $0.id == entry.id }
         unreliableIDs.remove(entry.id)
-        center.cancel(id: entry.id)
         save()
+        return true
     }
 
-    func delete(ids: Set<UUID>) {
+    func delete(ids: Set<UUID>) async {
+        await acquireMutationLock()
+        defer { releaseMutationLock() }
+
+        var cancelledIDs: Set<UUID> = []
         for id in ids {
-            center.cancel(id: id)
-            unreliableIDs.remove(id)
+            if center.cancel(id: id) {
+                cancelledIDs.insert(id)
+                unreliableIDs.remove(id)
+            }
         }
-        alarms.removeAll { ids.contains($0.id) }
+        alarms.removeAll { cancelledIDs.contains($0.id) }
         save()
     }
 
     func setEnabled(_ isEnabled: Bool, for entry: AlarmEntry) async {
+        await acquireMutationLock()
+        defer { releaseMutationLock() }
+
         guard let index = alarms.firstIndex(where: { $0.id == entry.id }) else { return }
-        alarms[index].isEnabled = isEnabled
-        save()
 
         if isEnabled {
+            alarms[index].isEnabled = true
+            save()
             await applySchedule(for: alarms[index])
         } else {
-            center.cancel(id: entry.id)
+            // Only show the alarm as off once the system confirms it can no
+            // longer ring.
+            guard center.cancel(id: entry.id) else { return }
+            alarms[index].isEnabled = false
+            alarms[index].armedFor = nil
             unreliableIDs.remove(entry.id)
+            save()
         }
     }
 
@@ -153,8 +165,14 @@ final class AlarmStore {
     /// fires, and the system may drop alarms if authorization was revoked — so
     /// this is the mechanism that makes "the toggle is on" mean "it will ring".
     func reconcile() async {
+        await acquireMutationLock()
+        defer { releaseMutationLock() }
+
         ingestPendingFireObservations()
-        center.refreshLiveAlarms()
+        guard center.refreshLiveAlarms() else {
+            unreliableIDs = Set(alarms.filter(\.isEnabled).map(\.id))
+            return
+        }
         guard center.isAuthorized else {
             // Without permission nothing is scheduled; flag every enabled alarm
             // rather than leaving the UI looking healthy.
@@ -209,11 +227,35 @@ final class AlarmStore {
             alarms[index].armedFor = entry.nextFireDate()
         } else {
             unreliableIDs.insert(entry.id)
-            // Don't leave a toggle on for an alarm that will never ring.
-            alarms[index].isEnabled = false
+            // Preserve the user's enabled state. A limit or transient daemon
+            // failure can clear later, and reconciliation will retry it.
             alarms[index].armedFor = nil
         }
         save()
+    }
+
+    // MARK: - Mutation serialization
+
+    /// Actor isolation protects memory, but an `await` still lets a newer UI
+    /// action overtake an older schedule request. This lock preserves request
+    /// order through AlarmKit so a stale completion can never create a ghost.
+    private func acquireMutationLock() async {
+        if !mutationIsLocked {
+            mutationIsLocked = true
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            mutationWaiters.append(continuation)
+        }
+    }
+
+    private func releaseMutationLock() {
+        guard !mutationWaiters.isEmpty else {
+            mutationIsLocked = false
+            return
+        }
+        mutationWaiters.removeFirst().resume()
     }
 
     // MARK: - Usage history

@@ -79,7 +79,7 @@ struct AlarmsView: View {
                                 Task { await store.setEnabled(isOn, for: entry) }
                             },
                             onTap: { editing = entry },
-                            onDelete: { store.delete(entry) }
+                            onDelete: { Task { await store.delete(entry) } }
                         )
                         .padding(.vertical, 12)
                     }
@@ -109,7 +109,7 @@ struct AlarmsView: View {
                                 Task { await store.setEnabled(isOn, for: entry) }
                             },
                             onTap: { editing = entry },
-                            onDelete: { store.delete(entry) }
+                            onDelete: { Task { await store.delete(entry) } }
                         )
                         .blurCard(.light)
                     }

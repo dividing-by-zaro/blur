@@ -5,9 +5,8 @@ import AlarmKit
 /// Tracks timers that are currently counting down.
 ///
 /// No history, no recents: when a timer is stopped or dismissed it is removed
-/// from `running` and nothing about it is kept. The store is memory-only — it is
-/// rebuilt at launch from AlarmKit's live alarms, which is the only place a
-/// running timer legitimately survives a relaunch.
+/// from `running` and from persistence. Only active records are stored, allowing
+/// Blur to restore and manage a system timer that survives an app relaunch.
 @MainActor
 @Observable
 final class TimerStore {
@@ -21,10 +20,13 @@ final class TimerStore {
     var pendingLabel: String = ""
 
     private let center: AlarmCenter
+    private let defaultsKey = "blur.activeTimers.v1"
     private var accentCounter = 0
 
     init(center: AlarmCenter = .shared) {
         self.center = center
+        load()
+        accentCounter = (running.map(\.accentIndex).max() ?? -1) + 1
     }
 
     // MARK: - Starting
@@ -45,6 +47,7 @@ final class TimerStore {
         guard ok else { return false }
 
         running.append(entry)
+        save()
 
         // The label is a one-shot: it applies to the timer just started and then
         // clears, so the next quick tap isn't mislabelled.
@@ -60,17 +63,25 @@ final class TimerStore {
     // MARK: - Controlling
 
     func pause(_ entry: TimerEntry) {
-        center.pause(id: entry.id)
+        guard center.pause(id: entry.id) else {
+            reconcile()
+            return
+        }
         guard let index = running.firstIndex(where: { $0.id == entry.id }) else { return }
         running[index].pausedRemaining = running[index].remaining()
+        save()
     }
 
     func resume(_ entry: TimerEntry) {
-        center.resume(id: entry.id)
+        guard center.resume(id: entry.id) else {
+            reconcile()
+            return
+        }
         guard let index = running.firstIndex(where: { $0.id == entry.id }),
               let remaining = running[index].pausedRemaining else { return }
         running[index].fireDate = Date().addingTimeInterval(remaining)
         running[index].pausedRemaining = nil
+        save()
     }
 
     func togglePause(_ entry: TimerEntry) {
@@ -84,23 +95,29 @@ final class TimerStore {
 
     /// Stops a ringing timer and removes it.
     func stop(_ entry: TimerEntry) {
-        center.stop(id: entry.id)
-        remove(entry.id)
+        if center.stop(id: entry.id) {
+            remove(entry.id)
+        }
     }
 
     /// Cancels a still-counting timer and removes it.
     func cancel(_ entry: TimerEntry) {
-        center.cancel(id: entry.id)
-        remove(entry.id)
+        if center.cancel(id: entry.id) {
+            remove(entry.id)
+        }
     }
 
     func cancelAll() {
-        for entry in running { center.cancel(id: entry.id) }
-        running.removeAll()
+        let cancelledIDs = Set(running.compactMap { entry in
+            center.cancel(id: entry.id) ? entry.id : nil
+        })
+        running.removeAll { cancelledIDs.contains($0.id) }
+        save()
     }
 
     private func remove(_ id: UUID) {
         running.removeAll { $0.id == id }
+        save()
     }
 
     // MARK: - State bridging
@@ -115,18 +132,21 @@ final class TimerStore {
 
     // MARK: - Reconciliation
 
-    /// Rebuilds `running` from AlarmKit, dropping anything that finished while
-    /// the app was away and re-adopting timers that are still counting.
+    /// Drops persisted timers AlarmKit no longer has and refreshes the local
+    /// state of the active records that survived a relaunch.
     func reconcile() {
-        center.refreshLiveAlarms()
+        // A failed daemon read is not evidence that any timer disappeared.
+        guard center.refreshLiveAlarms() else { return }
 
         // Drop timers AlarmKit no longer has — they fired and were dismissed.
+        let previousCount = running.count
         running.removeAll { entry in
             guard center.alarm(for: entry.id) == nil else { return false }
             return true
         }
 
-        syncPauseStates()
+        let stateChanged = updatePauseStates()
+        if running.count != previousCount || stateChanged { save() }
     }
 
     /// Reconciles local pause bookkeeping with AlarmKit's view of the world.
@@ -135,24 +155,47 @@ final class TimerStore {
     /// straight to `AlarmManager` without passing through this store — without
     /// this, a timer paused from the lock screen would keep counting down here.
     func syncPauseStates() {
+        if updatePauseStates() { save() }
+    }
+
+    @discardableResult
+    private func updatePauseStates() -> Bool {
         let now = Date()
+        var changed = false
         for index in running.indices {
             let entry = running[index]
             switch center.state(for: entry.id) {
             case .paused where entry.pausedRemaining == nil:
                 running[index].pausedRemaining = entry.remaining(at: now)
+                changed = true
             case .countdown where entry.pausedRemaining != nil:
                 let remaining = entry.pausedRemaining ?? entry.duration
                 running[index].fireDate = now.addingTimeInterval(remaining)
                 running[index].pausedRemaining = nil
+                changed = true
             default:
                 break
             }
         }
+        return changed
     }
 
     private func nextAccentIndex() -> Int {
         defer { accentCounter += 1 }
         return accentCounter % 3
+    }
+
+    // MARK: - Persistence
+
+    private func load() {
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
+              let entries = try? JSONDecoder().decode([TimerEntry].self, from: data)
+        else { return }
+        running = entries
+    }
+
+    private func save() {
+        guard let data = try? JSONEncoder().encode(running) else { return }
+        UserDefaults.standard.set(data, forKey: defaultsKey)
     }
 }
