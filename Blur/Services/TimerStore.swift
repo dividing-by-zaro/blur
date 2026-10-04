@@ -14,11 +14,6 @@ final class TimerStore {
     /// Timers the app has started and that haven't finished yet.
     private(set) var running: [TimerEntry] = []
 
-    /// Tone and label carried over between quick-timer taps, so setting a tone
-    /// once and then tapping 5 / 10 / 15 does what you'd expect.
-    var selectedTone: AlarmTone = .system
-    var pendingLabel: String = ""
-
     private let center: AlarmCenter
     private let defaultsKey = "blur.activeTimers.v1"
     private var accentCounter = 0
@@ -37,9 +32,9 @@ final class TimerStore {
         let clamped = max(1, min(seconds, 24 * 60 * 60))
 
         let entry = TimerEntry(
-            label: label ?? pendingLabel,
+            label: label ?? "",
             duration: clamped,
-            tone: tone ?? selectedTone,
+            tone: tone ?? .system,
             accentIndex: nextAccentIndex()
         )
 
@@ -48,10 +43,6 @@ final class TimerStore {
 
         running.append(entry)
         save()
-
-        // The label is a one-shot: it applies to the timer just started and then
-        // clears, so the next quick tap isn't mislabelled.
-        pendingLabel = ""
         return true
     }
 

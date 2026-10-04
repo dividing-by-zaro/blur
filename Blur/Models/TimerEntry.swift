@@ -83,17 +83,11 @@ struct TimerPreset: Identifiable, Hashable, Sendable {
 
     var seconds: TimeInterval { TimeInterval(minutes * 60) }
 
-    /// Compact label for the tile — "5" for minutes, "1h"/"90m"/"2h" for the
-    /// longer ones, so the grid stays visually even.
-    var title: String {
-        if minutes < 60 { return "\(minutes)" }
-        if minutes % 60 == 0 { return "\(minutes / 60)h" }
-        return "\(minutes)m"
-    }
+    /// Every tile is a number of minutes over "min", hours included, so the
+    /// grid reads in one unit.
+    var title: String { "\(minutes)" }
 
-    var unit: String {
-        minutes < 60 ? (minutes == 1 ? "min" : "min") : ""
-    }
+    var unit: String { "min" }
 
     var accessibilityLabel: String {
         "\(TimerEntry.describe(seconds: seconds)) timer"
@@ -110,6 +104,7 @@ struct TimerPreset: Identifiable, Hashable, Sendable {
         TimerPreset(minutes: 20),
         TimerPreset(minutes: 25),
         TimerPreset(minutes: 30),
+        TimerPreset(minutes: 45),
         TimerPreset(minutes: 60),
         TimerPreset(minutes: 90),
         TimerPreset(minutes: 120)

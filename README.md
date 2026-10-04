@@ -155,8 +155,8 @@ counter.
 
 **Timers** have no history and no recents — nothing about a timer is written to
 disk, and it's gone the moment it's stopped. Custom durations use direct
-hours/minutes/seconds keypad entry. Quick presets are 1–5, 10, 15, 20, 25, 30
-min, 1 hr, 90 min, 2 hr.
+hours/minutes/seconds keypad entry. Quick presets are 1–5, 10, 15, 20, 25, 30,
+45, 60, 90 and 120 min. Timers use the default tone and no label.
 
 **Stopwatch** is start / stop / reset only, no laps. Elapsed time is derived from
 wall-clock dates rather than accumulated ticks, so it stays exact across

@@ -8,7 +8,7 @@ struct StopwatchView: View {
     @Environment(StopwatchModel.self) private var stopwatch
 
     var body: some View {
-        BlurScreen(title: "Stopwatch", subtitle: "One number, three buttons") {
+        BlurScreen(title: "Stopwatch") {
             VStack(spacing: 24) {
                 dial
                 controls
@@ -19,70 +19,31 @@ struct StopwatchView: View {
 
     // MARK: Dial
 
-    /// The reference's gauge, made round: a yellow arc running over a charcoal
-    /// remainder, on a light card, with the number it describes inside it.
-    ///
-    /// The two-tone ring is why this card is light and not dark. Charcoal is
-    /// the only thing yellow reads cleanly against at this weight, and charcoal
-    /// only reads as a track if the card behind it is pale — a dark card would
-    /// swallow the untravelled part of the ring and leave a yellow arc floating
-    /// with nothing to measure it against.
-
-    /// Three-quarters of a turn with the gap at the bottom, not a closed ring.
-    /// A full circle of charcoal this heavy reads as a loading spinner stuck at
-    /// zero; an open gauge reads as a dial with a start and an end, which is
-    /// also the shape the reference uses.
-    private static let sweep: CGFloat = 0.75
-
+    /// Just the elapsed time and its state. A stopwatch has no end to measure
+    /// progress toward, so there's no ring or gauge around the number.
     private var dial: some View {
-        VStack(spacing: 18) {
-            ZStack {
-                Circle()
-                    .trim(from: 0, to: Self.sweep)
-                    .stroke(Blur.charcoal,
-                            style: StrokeStyle(lineWidth: 15, lineCap: .round))
+        VStack(spacing: 14) {
+            Text(stopwatch.formatted)
+                .font(.blurDigits(52, weight: .bold))
+                .foregroundStyle(Blur.ink)
+                .contentTransition(.numericText())
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
 
-                // Sweeps once a minute, so the arc reads as a seconds hand
-                // rather than a progress bar toward some arbitrary end.
-                Circle()
-                    .trim(from: 0, to: Self.sweep * secondsFraction)
-                    .stroke(Blur.wave, style: StrokeStyle(lineWidth: 15, lineCap: .round))
-                    .animation(.linear(duration: 0.05), value: secondsFraction)
-                    .blurGlow(Blur.periwinkle, radius: 18,
-                              opacity: stopwatch.isRunning ? 0.40 : 0.10)
-            }
-            // Trim starts at 3 o'clock, so this puts the gauge's open end at
-            // 7:30 and closes it at 4:30.
-            .rotationEffect(.degrees(135))
-            // Applied after the rotation, so the readout stays upright.
-            .overlay {
-                VStack(spacing: 10) {
-                    Text(stopwatch.formatted)
-                        .font(.blurDigits(42, weight: .bold))
-                        .foregroundStyle(Blur.ink)
-                        .contentTransition(.numericText())
-
-                    Text(statusText)
-                        .font(.blurRounded(11, weight: .bold))
-                        .tracking(1.8)
-                        .foregroundStyle(statusColor)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 5)
-                        .background(Capsule().fill(statusColor.opacity(0.14)))
-                }
-            }
-            .frame(width: 244, height: 244)
-            .padding(.vertical, 4)
+            Text(statusText)
+                .font(.blurRounded(11, weight: .bold))
+                .tracking(1.8)
+                .foregroundStyle(statusColor)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(Capsule().fill(statusColor.opacity(0.14)))
         }
         .frame(maxWidth: .infinity)
+        .padding(.vertical, 36)
         .blurCard(.light, padding: 22, radius: 34)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Stopwatch")
         .accessibilityValue(stopwatch.formatted)
-    }
-
-    private var secondsFraction: Double {
-        stopwatch.elapsed.truncatingRemainder(dividingBy: 60) / 60
     }
 
     private var statusText: String {

@@ -25,7 +25,7 @@ struct TimersView: View {
     var body: some View {
         @Bindable var store = store
 
-        BlurScreen(title: "Timer", subtitle: subtitle) {
+        BlurScreen(title: "Timer") {
             if !store.running.isEmpty {
                 BlurGlassButton(systemName: "xmark") { store.cancelAll() }
                     .accessibilityLabel("Clear all timers")
@@ -58,7 +58,6 @@ struct TimersView: View {
             }
 
             quickTimers
-            toneAndLabel
             customTimer
         }
         // `Alarm` isn't Equatable, so watch the states — which is the only part
@@ -80,10 +79,6 @@ struct TimersView: View {
         }
     }
 
-    private var subtitle: String? {
-        store.running.isEmpty ? "Tap a preset or enter a duration" : nil
-    }
-
     // MARK: Quick timers
 
     private var quickTimers: some View {
@@ -94,7 +89,7 @@ struct TimersView: View {
                 ForEach(Array(TimerPreset.all.enumerated()), id: \.element.id) { index, preset in
                     // One surface per row, not per tile: the grid darkens as the
                     // durations get longer — ivory for minutes, lavender for the
-                    // quarter-hours, charcoal for the hours. It reads as three
+                    // quarter-hours, charcoal for the longest. It reads as three
                     // bands rather than a checkerboard, and the weight of the
                     // tile tells you roughly how long the timer is before you've
                     // read the number.
@@ -105,36 +100,6 @@ struct TimersView: View {
                 }
             }
         }
-    }
-
-    // MARK: Tone + label
-
-    private var toneAndLabel: some View {
-        @Bindable var store = store
-
-        return VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("TONE")
-                        .font(.blurRounded(11, weight: .bold))
-                        .tracking(0.8)
-                        .foregroundStyle(Blur.inkFaint)
-                    Spacer(minLength: 8)
-                    Text("Applies to new timers")
-                        .font(.blurRounded(11, weight: .medium))
-                        .foregroundStyle(Blur.inkFaint)
-                        .lineLimit(1)
-                }
-
-                TonePickerRow(selection: $store.selectedTone, accent: Blur.blue)
-            }
-
-            BlurField(title: "Label (optional)",
-                      text: $store.pendingLabel,
-                      placeholder: "Pasta, laundry, focus…",
-                      accent: Blur.blue)
-        }
-        .blurCard(.glass)
     }
 
     // MARK: Custom
@@ -178,10 +143,6 @@ struct TimersView: View {
                     )
                     .font(.blurRounded(13, weight: .semibold))
                     .foregroundStyle(Blur.inkSoft)
-                } else {
-                    Text("Tap a field and enter the duration with the number pad")
-                        .font(.blurRounded(13, weight: .medium))
-                        .foregroundStyle(Blur.inkFaint)
                 }
 
                 Button("Start Timer") { startCustom() }
