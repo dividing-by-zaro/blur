@@ -108,8 +108,7 @@ enum Blur {
         endPoint: .bottom
     )
 
-    /// The fill gradient for large graphical marks — the stopwatch arc, the
-    /// next-alarm ring. Runs periwinkle into indigo so a long stroke has some
+    /// The fill gradient for large graphical marks — the next-alarm ring. Runs periwinkle into indigo so a long stroke has some
     /// depth; both ends clear 3:1 on ivory.
     static let wave = LinearGradient(
         colors: [Color(red: 0.510, green: 0.588, blue: 0.867), periwinkle,

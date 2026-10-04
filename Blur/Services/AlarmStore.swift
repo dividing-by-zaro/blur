@@ -208,8 +208,8 @@ final class AlarmStore {
         }
 
         // Leave every unowned AlarmKit record alone. Alarms and timers share the
-        // same manager, and the timer store is intentionally memory-only, so a
-        // valid timer can outlive the in-app record that originally created it.
+        // same manager, and the timer store only tracks what it has itself
+        // started, so a valid timer can outlive the in-app record for it.
         // Explicit alarm updates and deletes already cancel ids this store owns.
 
         unreliableIDs = stillUnreliable
